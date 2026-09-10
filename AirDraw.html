@@ -21,12 +21,12 @@
     margin:0; padding:0; width:100%; height:100%; overflow:hidden;
     background:#000; font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
     -webkit-user-select:none; user-select:none; touch-action:none;
+    -webkit-tap-highlight-color:transparent;
   }
   #app{ position:fixed; inset:0; }
   #outputCanvas{ position:absolute; inset:0; width:100%; height:100%; display:block; background:var(--panel-bg); touch-action:none; }
   video{ display:none; }
 
-  /* Floating hamburger menu button (mobile/small screens) */
   #menuBtn{
     position:fixed; top:calc(14px + env(safe-area-inset-top, 0px)); left:calc(14px + env(safe-area-inset-left, 0px));
     z-index:20; width:46px; height:46px; border-radius:12px;
@@ -43,7 +43,6 @@
   #menuBtn:active{ transform:scale(0.94); background:rgba(60,191,232,0.22); }
   #menuBtn.open{ background:rgba(60,191,232,0.28); border-color:rgb(60,191,232); }
 
-  /* Landscape recommendation overlay */
   #rotatePrompt{
     position:fixed; inset:0; z-index:100; display:none;
     align-items:center; justify-content:center; flex-direction:column;
@@ -121,8 +120,8 @@
   <button id="startBtn">Enable Camera &amp; Start</button>
   <div class="hint">
     Your camera feed stays in your browser — nothing is uploaded. On mobile, this page will
-    request <strong>fullscreen landscape</strong>. You can tap the <strong>☰ menu</strong> to open
-    the sidebar, or use hand gestures as before. Requires <strong>HTTPS</strong> or
+    request <strong>fullscreen landscape</strong>. Tap <strong>☰</strong> to open the sidebar;
+    swipe up/down inside the sidebar to scroll. Requires <strong>HTTPS</strong> or
     <strong>localhost</strong> for camera access.
   </div>
   <div id="errBox"></div>
@@ -140,29 +139,38 @@ import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@m
 // ==========================================================================
 const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+const IS_MOBILE = isMobileUA || (isTouchDevice && Math.min(window.innerWidth, window.innerHeight) < 800);
 
 function isSmallScreen(){
   return window.innerWidth < 900 || (window.innerWidth < 1100 && window.innerHeight < 560);
 }
 
 // ==========================================================================
-// CONFIG
+// CONFIG  (mobile-tuned)
 // ==========================================================================
-const GESTURE_SMOOTHING = 12;              // slightly higher for extra stability
-// One-Euro tuning for smoother tracking: higher min cutoff => smoother idle,
-// lower beta => less reactive to speed => calmer overall.
-const EURO_MIN_CUTOFF = 2.4;
-const EURO_BETA = 0.35;
+const GESTURE_SMOOTHING = IS_MOBILE ? 9 : 12;
+const EURO_MIN_CUTOFF = IS_MOBILE ? 2.6 : 2.4;
+const EURO_BETA = IS_MOBILE ? 0.30 : 0.35;
 const EURO_D_CUTOFF = 1.0;
-const EURO_MAX_DT = 0.05;
+const EURO_MAX_DT = IS_MOBILE ? 0.08 : 0.05;
 
 const HOVER_SELECT_SECONDS = 0.6;
 const FINGER_EXTEND_RATIO = 1.20;
-const MAX_UNDO = 25;
+const MAX_UNDO = 20;
 const ERASER_THICKNESS_GESTURE = 70;
 const ERASER_THICKNESS_MANUAL = 44;
 const STROKE_START_DIST = 3;
-const PIP_MARGIN = 22;
+const PIP_MARGIN = IS_MOBILE ? 12 : 22;
+
+const DETECT_INTERVAL_MS = IS_MOBILE ? 45 : 0;
+
+const CAMERA_CONSTRAINTS = IS_MOBILE ? {
+  video: { facingMode:'user', width:{ideal:640}, height:{ideal:480}, frameRate:{ideal:24, max:30} },
+  audio: false
+} : {
+  video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720} },
+  audio: false
+};
 
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
@@ -212,7 +220,7 @@ const GESTURE_STYLE = {
 };
 
 // ==========================================================================
-// ONE-EURO FILTER (with max dt clamp)
+// ONE-EURO FILTER
 // ==========================================================================
 class LowPassFilter{
   constructor(){ this._init=false; this.value=0; }
@@ -315,21 +323,31 @@ function pointInBox(px,py,box){ return px>=box[0] && px<=box[2] && py>=box[1] &&
 // ==========================================================================
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('outputCanvas');
-const ctx = canvas.getContext('2d');
+// NOTE: removed `desynchronized: true` — it caused sidebar flicker/tearing on
+// many desktop GPUs (especially hybrid-graphics laptops). Not worth the risk.
+const ctx = canvas.getContext('2d', { alpha: false });
 const menuBtn = document.getElementById('menuBtn');
 const rotatePrompt = document.getElementById('rotatePrompt');
 
 let W=0, H=0;
 let SIDEBAR_WIDTH = 240;
 
-// Sidebar visibility (dynamic on small screens)
 let sidebarOpen = true;
+
+// Sidebar scroll state
+let sidebarScrollY = 0;
+let sidebarContentHeight = 0;
+let sidebarViewport = { top: 0, bottom: 0, height: 0 };
 
 // persistent drawing surface
 let boardCanvas = document.createElement('canvas');
-let boardCtx = boardCanvas.getContext('2d');
+let boardCtx = boardCanvas.getContext('2d', { willReadFrequently: false });
 let gridCanvas = document.createElement('canvas');
-let gridCtx = gridCanvas.getContext('2d');
+let gridCtx = gridCanvas.getContext('2d', { alpha: false });
+
+// Cached sidebar header gradient (rebuilt only on resize)
+const SIDEBAR_HEADER_H = 92;
+let sidebarHeaderGrad = null;
 
 let handLandmarker = null;
 let running = false;
@@ -355,6 +373,13 @@ let fpsHist = []; let prevTick = performance.now();
 let startTime = performance.now();
 
 let lastHandLandmarks = null;
+let lastDetectMs = 0;
+let cachedResult = null;
+
+// Pointer / scroll drag
+let scrollDragActive = false;
+let scrollDragStartClientY = 0;
+let scrollDragStartScroll = 0;
 
 // ==========================================================================
 // DRAW-AREA / SIDEBAR HELPERS
@@ -378,13 +403,42 @@ function updateMenuBtnState(){
   }
 }
 function updateOrientationPrompt(){
-  // Show prompt on touch devices in portrait orientation while app is running
   const portrait = window.innerHeight > window.innerWidth;
   if (running && isMobileUA && portrait){
     rotatePrompt.style.display = 'flex';
   } else {
     rotatePrompt.style.display = 'none';
   }
+}
+
+// ==========================================================================
+// SIDEBAR SCROLL / VIEWPORT
+// ==========================================================================
+function computeSidebarViewport(){
+  const gestureBottom = SIDEBAR_HEADER_H + 38;
+  const top = gestureBottom + 14;
+  const bottom = H - 80;
+  sidebarViewport = { top, bottom, height: Math.max(60, bottom - top) };
+}
+
+function setSidebarScroll(y){
+  const maxScroll = Math.max(0, sidebarContentHeight - sidebarViewport.height);
+  sidebarScrollY = Math.max(0, Math.min(maxScroll, y));
+}
+
+function getButtonScreenBox(btn){
+  const [x1,y1,x2,y2] = btn.box;
+  const off = sidebarViewport.top - sidebarScrollY;
+  return [x1, y1+off, x2, y2+off];
+}
+
+function hitTestSidebar(px, py){
+  if (py < sidebarViewport.top || py > sidebarViewport.bottom) return null;
+  for(const btn of buttons){
+    const sbox = getButtonScreenBox(btn);
+    if (pointInBox(px, py, sbox)) return btn;
+  }
+  return null;
 }
 
 // ==========================================================================
@@ -400,12 +454,12 @@ function resizeAll(){
 
   // Responsive sidebar width
   if (isSmallScreen()){
-    SIDEBAR_WIDTH = Math.round(Math.min(260, Math.max(200, W*0.34)));
+    SIDEBAR_WIDTH = Math.round(Math.min(230, Math.max(180, W*0.30)));
   } else {
     SIDEBAR_WIDTH = Math.round(Math.min(260, Math.max(200, W*0.20)));
   }
 
-  // preserve existing board content, scaled into new size
+  // Resize boardCanvas while preserving content
   const oldBoard = boardCanvas;
   const newBoard = document.createElement('canvas');
   newBoard.width = W; newBoard.height = H;
@@ -415,8 +469,9 @@ function resizeAll(){
   }
   boardCanvas = newBoard; boardCtx = newCtx;
 
+  // Rebuild grid
   gridCanvas.width = W; gridCanvas.height = H;
-  gridCtx = gridCanvas.getContext('2d');
+  gridCtx = gridCanvas.getContext('2d', { alpha: false });
   gridCtx.fillStyle = BOARD_BG;
   gridCtx.fillRect(0,0,W,H);
   gridCtx.strokeStyle = GRID_COLOR;
@@ -427,13 +482,21 @@ function resizeAll(){
   for(let y=0;y<H;y+=step){ gridCtx.moveTo(0,y+0.5); gridCtx.lineTo(W,y+0.5); }
   gridCtx.stroke();
 
-  buttons = buildButtonLayout();
+  // Cache sidebar header gradient (was being recreated every frame → wasteful + can flicker)
+  sidebarHeaderGrad = ctx.createLinearGradient(0, 0, 0, SIDEBAR_HEADER_H);
+  sidebarHeaderGrad.addColorStop(0, PANEL_BG_2);
+  sidebarHeaderGrad.addColorStop(1, PANEL_BG);
+
+  // Rebuild sidebar layout
+  computeSidebarViewport();
+  layoutSidebar();
+  setSidebarScroll(sidebarScrollY);
   updateMenuBtnState();
   updateOrientationPrompt();
 }
 
 // ==========================================================================
-// SIDEBAR BUTTON LAYOUT
+// SIDEBAR BUTTON LAYOUT (logical coords starting at y=0)
 // ==========================================================================
 let buttons = [];
 function buildButtonLayout(){
@@ -441,7 +504,9 @@ function buildButtonLayout(){
   const pad = 18;
   const x1 = pad, x2 = SIDEBAR_WIDTH - pad;
 
-  let y = 130;
+  let y = 0;   // logical top
+
+  // color swatches
   const cols = 4, gap = 12;
   const swatch = Math.floor((x2-x1-gap*(cols-1))/cols);
   COLOR_NAMES.forEach((name,i)=>{
@@ -453,12 +518,14 @@ function buildButtonLayout(){
   const rows = Math.ceil(COLOR_NAMES.length/cols);
   y += rows*(swatch+gap) + 16;
 
+  // thickness stepper
   const stepH = 40;
   const halfW = Math.floor((x2-x1-10)/2);
   list.push({label:'THINNER', kind:'thickness', value:-1, box:[x1,y,x1+halfW,y+stepH]});
   list.push({label:'THICKER', kind:'thickness', value:1, box:[x1+halfW+10,y,x2,y+stepH]});
   y += stepH + 30;
 
+  // tools
   const toolH = 42;
   const tHalf = Math.floor((x2-x1-10)/2);
   const toolBoxes = [['PEN','pen'],['LINE','line'],['RECT','rect'],['CIRCLE','circle']];
@@ -471,18 +538,26 @@ function buildButtonLayout(){
   const rowsT = Math.ceil(toolBoxes.length/2);
   y += rowsT*(toolH+10) + 14;
 
+  // undo / redo
   const urH = 40;
   list.push({label:'UNDO', kind:'action', value:'undo', box:[x1,y,x1+halfW,y+urH]});
   list.push({label:'REDO', kind:'action', value:'redo', box:[x1+halfW+10,y,x2,y+urH]});
   y += urH + 16;
 
+  // clear / save
   const bigH = 48;
   list.push({label:'CLEAR BOARD', kind:'action', value:'clear', box:[x1,y,x2,y+bigH]});
   y += bigH+10;
   list.push({label:'SAVE IMAGE', kind:'action', value:'save', box:[x1,y,x2,y+bigH]});
   y += bigH+10;
 
-  return list;
+  return { list, totalHeight: y };
+}
+
+function layoutSidebar(){
+  const { list, totalHeight } = buildButtonLayout();
+  buttons = list;
+  sidebarContentHeight = totalHeight;
 }
 
 // ==========================================================================
@@ -574,7 +649,7 @@ function saveImage(){
 }
 
 // ==========================================================================
-// TRIGGER BUTTON ACTION (shared by hover-select and manual tap)
+// TRIGGER BUTTON ACTION
 // ==========================================================================
 function triggerButtonAction(btn, now){
   const {label, kind, value} = btn;
@@ -605,13 +680,21 @@ function drawGaugeRing(cx,cy,r,progress,color,thickness=3){
 }
 
 function drawSidebar(hoverProgress, confirmedGesture, handPresent, fps, now){
-  // Sidebar backing
-  roundRect(ctx, 0,0, SIDEBAR_WIDTH, H, 0, PANEL_BG, null);
+  const vp = sidebarViewport;
+  const headerH = SIDEBAR_HEADER_H;
 
-  const headerH = 92;
-  const grad = ctx.createLinearGradient(0,0,0,headerH);
-  grad.addColorStop(0, PANEL_BG_2); grad.addColorStop(1, PANEL_BG);
-  ctx.fillStyle = grad; ctx.fillRect(0,0,SIDEBAR_WIDTH, headerH);
+  // background
+  ctx.fillStyle = PANEL_BG;
+  ctx.fillRect(0, 0, SIDEBAR_WIDTH, H);
+
+  // header (fixed) — use cached gradient
+  if (sidebarHeaderGrad){
+    ctx.fillStyle = sidebarHeaderGrad;
+    ctx.fillRect(0,0,SIDEBAR_WIDTH, headerH);
+  } else {
+    ctx.fillStyle = PANEL_BG_2;
+    ctx.fillRect(0,0,SIDEBAR_WIDTH, headerH);
+  }
 
   ctx.strokeStyle = ACCENT_CYAN; ctx.lineWidth=2;
   ctx.beginPath(); ctx.arc(28,30,9,0,Math.PI*2); ctx.stroke();
@@ -630,20 +713,33 @@ function drawSidebar(hoverProgress, confirmedGesture, handPresent, fps, now){
   ctx.strokeStyle = PANEL_LINE; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(18,headerH); ctx.lineTo(SIDEBAR_WIDTH-18, headerH); ctx.stroke();
 
+  // gesture indicator (fixed)
   const [gLabel, gColor] = GESTURE_STYLE[confirmedGesture] || GESTURE_STYLE.NONE;
   roundRect(ctx, 18, headerH+12, SIDEBAR_WIDTH-18, headerH+38, 8, PANEL_BG_2, null);
   ctx.fillStyle = gColor; ctx.beginPath(); ctx.arc(32, headerH+25, 4, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = PANEL_TEXT; ctx.font = "11px 'Segoe UI', sans-serif";
   ctx.fillText(gLabel.toUpperCase(), 44, headerH+29);
 
+  // Scrollable viewport for buttons
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, vp.top, SIDEBAR_WIDTH, vp.height);
+  ctx.clip();
+
+  const off = vp.top - sidebarScrollY;
+
   for(const btn of buttons){
-    const {label, kind, value, box} = btn;
-    const [x1,y1,x2,y2] = box;
+    const {label, kind, value} = btn;
+    const [x1,y1,x2,y2] = btn.box;
+    const sy1 = y1 + off, sy2 = y2 + off;
+
+    if (sy2 < vp.top - 4 || sy1 > vp.bottom + 4) continue;
+
     const isActive = (kind==='color' && label===activeColorName) || (kind==='tool' && value===activeTool);
     const isHover = (label===hoverLabel);
 
     if(kind==='color'){
-      const cx=(x1+x2)/2, cy=(y1+y2)/2, r=(x2-x1)/2;
+      const cx=(x1+x2)/2, cy=(sy1+sy2)/2, r=(x2-x1)/2;
       ctx.fillStyle = value; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
       if(isActive){
         const glow = pulse(now,1.6,0.7,1.0);
@@ -660,36 +756,57 @@ function drawSidebar(hoverProgress, confirmedGesture, handPresent, fps, now){
       if(isActive){ base=ACCENT_CYAN; textColor='#121212'; }
       else if(isHover){ base='rgb(66,62,57)'; textColor=PANEL_TEXT; }
       else { base=PANEL_BG_3; textColor=PANEL_TEXT; }
-      roundRect(ctx, x1,y1,x2,y2, 9, base, isActive?null:PANEL_LINE, 1);
+      roundRect(ctx, x1,sy1,x2,sy2, 9, base, isActive?null:PANEL_LINE, 1);
       const fontSize = kind==='tool' ? 11 : 12;
       ctx.font = `600 ${fontSize}px 'Segoe UI', sans-serif`;
       ctx.fillStyle = textColor;
       const tw = ctx.measureText(label).width;
       const tx = x1 + Math.max(4, ((x2-x1)-tw)/2);
-      const ty = (y1+y2)/2 + fontSize/2 - 2;
+      const ty = (sy1+sy2)/2 + fontSize/2 - 2;
       ctx.fillText(label, tx, ty);
 
       if(isHover && hoverProgress>0){
         const eased = easeOutCubic(hoverProgress);
         const barW = (x2-x1)*eased;
-        roundRect(ctx, x1, y2+4, Math.max(x1+4, x1+barW), y2+8, 2, ACCENT_CYAN, null);
+        roundRect(ctx, x1, sy2+4, Math.max(x1+4, x1+barW), sy2+8, 2, ACCENT_CYAN, null);
       }
     }
   }
 
+  // thickness label (attached to the thicker button)
   for(const btn of buttons){
     if(btn.kind==='thickness' && btn.value===1){
       const [,ty1] = btn.box;
-      ctx.fillStyle = PANEL_SUBTEXT; ctx.font="10px 'Segoe UI', sans-serif";
-      ctx.fillText(`THICKNESS  ${brushThickness}px`, 18, ty1-10);
+      const sy1 = ty1 + off;
+      if (sy1 - 10 > vp.top && sy1 - 10 < vp.bottom){
+        ctx.fillStyle = PANEL_SUBTEXT; ctx.font="10px 'Segoe UI', sans-serif";
+        ctx.fillText(`THICKNESS  ${brushThickness}px`, 18, sy1-10);
+      }
       break;
     }
   }
 
+  ctx.restore();
+
+  // Scrollbar indicator
+  const maxScroll = Math.max(0, sidebarContentHeight - vp.height);
+  if (maxScroll > 0){
+    const trackX = SIDEBAR_WIDTH - 5;
+    const trackTop = vp.top;
+    const trackH = vp.height;
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(trackX, trackTop, 3, trackH);
+    const thumbH = Math.max(24, trackH * (vp.height / sidebarContentHeight));
+    const thumbY = trackTop + (trackH - thumbH) * (sidebarScrollY / maxScroll);
+    ctx.fillStyle = 'rgba(60,191,232,0.55)';
+    ctx.fillRect(trackX, thumbY, 3, thumbH);
+  }
+
+  // footer (fixed)
   const gy = H-66;
   ctx.strokeStyle = PANEL_LINE; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(18,gy-14); ctx.lineTo(SIDEBAR_WIDTH-18, gy-14); ctx.stroke();
-  ctx.fillStyle = PANEL_TEXT; ctx.font="11px 'Segoe UI', sans-serif";
+  ctx.fillStyle = PANEL_TEXT; ctx.font="11px 'Segoe UI', sans-serif"; ctx.textAlign='left';
   ctx.fillText(handPresent ? 'hand tracked' : 'hand not found', 20, gy+8);
   ctx.fillStyle = PANEL_SUBTEXT; ctx.font="10px 'Segoe UI', sans-serif"; ctx.textAlign='right';
   ctx.fillText(`${fps.toFixed(1)} FPS`, SIDEBAR_WIDTH-18, gy+8);
@@ -715,13 +832,13 @@ function drawHelpOverlay(){
     ["Open hand (4 fingers)    →  Eraser follows your fingertip", 12, PANEL_TEXT, 20, false],
     ["Fist                     →  Pen up / idle", 12, PANEL_TEXT, 24, false],
     ["Input", 14, ACCENT_CYAN, 24, true],
-    ["Tap the ☰ menu button (small screens) to toggle the sidebar", 11.5, PANEL_TEXT, 20, false],
-    ["Click / tap any sidebar button to activate it directly", 11.5, PANEL_TEXT, 24, false],
+    ["☰ toggles sidebar on small screens", 11.5, PANEL_TEXT, 20, false],
+    ["Swipe up/down inside the sidebar to scroll it", 11.5, PANEL_TEXT, 20, false],
+    ["Click / tap any button to activate it directly", 11.5, PANEL_TEXT, 24, false],
     ["Keyboard shortcuts", 14, ACCENT_CYAN, 24, true],
     ["1-8 color   d pen   e eraser   l line   r rect   o circle", 11, PANEL_TEXT, 18, false],
     ["c clear   s save   z undo   y redo   +/- thickness", 11, PANEL_TEXT, 18, false],
     ["f fullscreen   h toggle this help   q / Esc quit", 11, PANEL_TEXT, 22, false],
-    ["Tip: On mobile, rotate to landscape for the best experience.", 11, PANEL_SUBTEXT, 20, false],
   ];
   let ty = y1+34;
   for(const [text,size,color,dy,bold] of lines){
@@ -733,7 +850,7 @@ function drawHelpOverlay(){
 }
 
 function overlayCameraPip(handPresent, now, handLandmarks){
-  const pw = Math.round(Math.min(230, W*0.26));
+  const pw = Math.round(Math.min(IS_MOBILE ? 150 : 230, W*0.26));
   const ph = Math.round(pw*(170/230));
   const x1 = W-PIP_MARGIN-pw, y1 = PIP_MARGIN+24;
   const x2 = x1+pw, y2 = y1+ph;
@@ -752,7 +869,7 @@ function overlayCameraPip(handPresent, now, handLandmarks){
   ctx.drawImage(video, W-x2, y1, x2-x1, y2-y1);
   ctx.restore();
 
-  if(handPresent && handLandmarks){
+  if(handPresent && handLandmarks && pw >= 120){
     ctx.strokeStyle='rgb(90,220,130)'; ctx.lineWidth=2;
     for(const [a,b] of HAND_CONNECTIONS){
       const pa=handLandmarks[a], pb=handLandmarks[b];
@@ -781,7 +898,7 @@ function overlayCameraPip(handPresent, now, handLandmarks){
   ctx.fillText(status, x2-tw, y1-8);
 }
 
-function drawCursor(ix,iy,gesture,now){
+function drawCursor(ix,iy,gesture){
   let color;
   if(gesture==='DRAW') color=ACCENT_CYAN;
   else if(gesture==='MENU') color=ACCENT_AMBER;
@@ -789,9 +906,12 @@ function drawCursor(ix,iy,gesture,now){
   else color='rgb(160,160,160)';
 
   const baseR = gesture==='ERASE' ? 22 : 10;
-  for(const [rad,a] of [[baseR+10,0.06],[baseR+5,0.10]]){
-    ctx.fillStyle = rgbToRgba(color,a);
-    ctx.beginPath(); ctx.arc(ix,iy,rad,0,Math.PI*2); ctx.fill();
+
+  if (!IS_MOBILE){
+    for(const [rad,a] of [[baseR+10,0.06],[baseR+5,0.10]]){
+      ctx.fillStyle = rgbToRgba(color,a);
+      ctx.beginPath(); ctx.arc(ix,iy,rad,0,Math.PI*2); ctx.fill();
+    }
   }
   ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ix,iy,baseR,0,Math.PI*2); ctx.stroke();
   ctx.fillStyle=color; ctx.beginPath(); ctx.arc(ix,iy,2,0,Math.PI*2); ctx.fill();
@@ -828,19 +948,16 @@ function drawToast(text, elapsed, duration=2.0){
 // ==========================================================================
 function handleMenuGesture(ix,iy,now){
   shapeAnchor = null; xp=0; yp=0; strokePendingPos=null;
-  let hovered = null;
-  for(const btn of buttons){ if(pointInBox(ix,iy,btn.box)){ hovered=btn; break; } }
-
-  if(hovered){
-    const {label} = hovered;
-    if(hoverLabel === label){
+  const btn = hitTestSidebar(ix, iy);
+  if (btn){
+    if(hoverLabel === btn.label){
       const progress = (now - hoverStart)/1000/HOVER_SELECT_SECONDS;
       if(progress >= 1.0){
-        triggerButtonAction(hovered, now);
+        triggerButtonAction(btn, now);
         hoverStart = now;
       }
     } else {
-      hoverLabel = label; hoverStart = now;
+      hoverLabel = btn.label; hoverStart = now;
     }
   } else {
     hoverLabel = null; hoverStart = null;
@@ -848,30 +965,36 @@ function handleMenuGesture(ix,iy,now){
 }
 
 function processFrame(now){
-  ctx.clearRect(0,0,W,H);
-  ctx.drawImage(gridCanvas,0,0);
-  ctx.drawImage(boardCanvas,0,0);
+  // draw grid + board in one pass (grid fills the whole canvas → no clear needed)
+  ctx.drawImage(gridCanvas, 0, 0);
+  ctx.drawImage(boardCanvas, 0, 0);
 
   let handPresent=false, ix=null, iy=null, rawGesture='IDLE';
 
   if(handLandmarker && video.readyState>=2){
-    const result = handLandmarker.detectForVideo(video, now);
-    handPresent = !!(result.landmarks && result.landmarks.length>0);
-    if(handPresent){
-      const landmarks = result.landmarks[0];
-      lastHandLandmarks = landmarks;
-      const up = fingersUp(landmarks);
-      rawGesture = classifyRawGesture(up);
+    if (now - lastDetectMs >= DETECT_INTERVAL_MS){
+      lastDetectMs = now;
+      cachedResult = handLandmarker.detectForVideo(video, now);
+    }
+    const result = cachedResult;
+    if (result){
+      handPresent = !!(result.landmarks && result.landmarks.length>0);
+      if(handPresent){
+        const landmarks = result.landmarks[0];
+        lastHandLandmarks = landmarks;
+        const up = fingersUp(landmarks);
+        rawGesture = classifyRawGesture(up);
 
-      const indexTip = landmarks[TIPS.index];
-      const mirroredX = 1 - indexTip.x;
-      const rawX = Math.min(Math.max(mirroredX*W, 0), W-1);
-      const rawY = Math.min(Math.max(indexTip.y*H, 0), H-1);
-      ix = Math.round(filterX.filter(rawX, now/1000));
-      iy = Math.round(filterY.filter(rawY, now/1000));
-    } else {
-      lastHandLandmarks = null;
-      filterX.reset(); filterY.reset();
+        const indexTip = landmarks[TIPS.index];
+        const mirroredX = 1 - indexTip.x;
+        const rawX = Math.min(Math.max(mirroredX*W, 0), W-1);
+        const rawY = Math.min(Math.max(indexTip.y*H, 0), H-1);
+        ix = Math.round(filterX.filter(rawX, now/1000));
+        iy = Math.round(filterY.filter(rawY, now/1000));
+      } else {
+        lastHandLandmarks = null;
+        filterX.reset(); filterY.reset();
+      }
     }
   }
 
@@ -927,12 +1050,13 @@ function processFrame(now){
   }
 
   if(shapePreview){
-    ctx.clearRect(0,0,W,H); ctx.drawImage(gridCanvas,0,0); ctx.drawImage(boardCanvas,0,0);
+    ctx.drawImage(gridCanvas, 0, 0);
+    ctx.drawImage(boardCanvas, 0, 0);
     const [tool,p1,p2] = shapePreview;
     drawShapePreview(ctx, tool, p1, p2, activeColor, brushThickness);
   }
 
-  if(ix!==null) drawCursor(ix,iy,gesture,now/1000);
+  if(ix!==null) drawCursor(ix,iy,gesture);
 
   overlayCameraPip(handPresent, now/1000, lastHandLandmarks);
 
@@ -958,7 +1082,7 @@ function loop(now){
 }
 
 // ==========================================================================
-// MANUAL TAP / CLICK HANDLING FOR SIDEBAR BUTTONS
+// MANUAL TAP / DRAG / SCROLL ON SIDEBAR
 // ==========================================================================
 function pointerCanvasCoords(e){
   const rect = canvas.getBoundingClientRect();
@@ -971,22 +1095,54 @@ canvas.addEventListener('pointerdown', (e)=>{
   if(!running) return;
   if(!isSidebarVisible()) return;
   const [x,y] = pointerCanvasCoords(e);
-  // Only handle taps that land inside the sidebar region
-  if(x > SIDEBAR_WIDTH) return;
-  for(const btn of buttons){
-    if(pointInBox(x,y,btn.box)){
-      triggerButtonAction(btn, performance.now());
-      e.preventDefault();
-      e.stopPropagation();
-      // small visual pulse
-      hoverLabel = btn.label;
-      hoverStart = performance.now() - HOVER_SELECT_SECONDS*1000*0.5;
-      return;
-    }
+  if (x > SIDEBAR_WIDTH) return;
+
+  const btn = hitTestSidebar(x, y);
+  if (btn){
+    triggerButtonAction(btn, performance.now());
+    hoverLabel = btn.label;
+    hoverStart = performance.now() - HOVER_SELECT_SECONDS*1000*0.5;
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+  const maxScroll = Math.max(0, sidebarContentHeight - sidebarViewport.height);
+  if (maxScroll > 0){
+    scrollDragActive = true;
+    scrollDragStartClientY = e.clientY;
+    scrollDragStartScroll = sidebarScrollY;
+    try { canvas.setPointerCapture(e.pointerId); } catch(err){}
+    e.preventDefault();
   }
 }, { passive:false });
 
-// Menu button toggle
+canvas.addEventListener('pointermove', (e)=>{
+  if(!scrollDragActive) return;
+  const dy = e.clientY - scrollDragStartClientY;
+  setSidebarScroll(scrollDragStartScroll - dy);
+  e.preventDefault();
+}, { passive:false });
+
+function endScrollDrag(e){
+  if(!scrollDragActive) return;
+  scrollDragActive = false;
+  try { canvas.releasePointerCapture(e.pointerId); } catch(err){}
+}
+canvas.addEventListener('pointerup', endScrollDrag);
+canvas.addEventListener('pointercancel', endScrollDrag);
+
+canvas.addEventListener('wheel', (e)=>{
+  if(!running) return;
+  if(!isSidebarVisible()) return;
+  const [x] = pointerCanvasCoords(e);
+  if (x > SIDEBAR_WIDTH) return;
+  const maxScroll = Math.max(0, sidebarContentHeight - sidebarViewport.height);
+  if (maxScroll <= 0) return;
+  setSidebarScroll(sidebarScrollY + e.deltaY);
+  e.preventDefault();
+}, { passive:false });
+
 menuBtn.addEventListener('click', (e)=>{
   e.preventDefault();
   sidebarOpen = !sidebarOpen;
@@ -998,7 +1154,6 @@ menuBtn.addEventListener('click', (e)=>{
 // ==========================================================================
 window.addEventListener('resize', resizeAll);
 window.addEventListener('orientationchange', ()=>{
-  // small delay for the OS to finish rotating
   setTimeout(resizeAll, 120);
   setTimeout(updateOrientationPrompt, 200);
 });
@@ -1041,8 +1196,6 @@ window.addEventListener('keydown', (e)=>{
 // STARTUP
 // ==========================================================================
 async function tryLockLandscape(){
-  // Request fullscreen + orientation lock. Both may be denied by the browser;
-  // we silently fall back to a rotate prompt in that case.
   try{
     if (document.documentElement.requestFullscreen && !document.fullscreenElement){
       await document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(()=>{});
@@ -1061,19 +1214,14 @@ async function startApp(){
   const loadingLine = document.getElementById('loadingLine');
   loadingLine.style.display = 'block';
 
-  // On mobile, request landscape first (must be user-gesture driven)
   if (isMobileUA){
     await tryLockLandscape();
-    // Give the OS a moment to rotate
     await new Promise(r => setTimeout(r, 250));
     resizeAll();
   }
 
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720} },
-      audio: false
-    });
+    const stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
     video.srcObject = stream;
     await video.play();
 
@@ -1086,9 +1234,9 @@ async function startApp(){
         baseOptions: { modelAssetPath: MODEL_URL, delegate },
         runningMode: 'VIDEO',
         numHands: 1,
-        minHandDetectionConfidence: 0.7,
-        minHandPresenceConfidence: 0.6,
-        minTrackingConfidence: 0.6,
+        minHandDetectionConfidence: 0.6,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
       });
     }
     try{ handLandmarker = await createLandmarker('GPU'); }
@@ -1097,7 +1245,6 @@ async function startApp(){
     loadingLine.style.display = 'none';
     startScreen.style.display = 'none';
 
-    // Default sidebar state based on device
     sidebarOpen = !isSmallScreen();
 
     resizeAll();
@@ -1118,7 +1265,6 @@ async function startApp(){
 
 document.getElementById('startBtn').addEventListener('click', startApp);
 
-// Initialize visibility on load
 updateMenuBtnState();
 updateOrientationPrompt();
 </script>
