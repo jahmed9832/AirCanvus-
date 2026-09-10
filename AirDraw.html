@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>AirDraw Pro — Touchless Whiteboard</title>
+<style>
+  :root{
+    --panel-bg:      rgb(22,24,26);
+    --panel-bg-2:    rgb(31,34,37);
+    --panel-bg-3:    rgb(40,44,47);
+    --panel-line:    rgb(51,55,58);
+    --panel-text:    rgb(240,240,240);
+    --panel-subtext: rgb(140,143,145);
+    --accent-cyan:   rgb(60,191,232);
+    --accent-amber:  rgb(245,170,30);
+    --accent-red:    rgb(220,70,70);
+    --accent-green:  rgb(120,210,110);
+  }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%; overflow:hidden;
+    background:#000; font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
+    -webkit-user-select:none; user-select:none; touch-action:none;
+  }
+  #app{ position:fixed; inset:0; }
+  #outputCanvas{ position:absolute; inset:0; width:100%; height:100%; display:block; background:var(--panel-bg); touch-action:none; }
+  video{ display:none; }
+
+  /* Floating hamburger menu button (mobile/small screens) */
+  #menuBtn{
+    position:fixed; top:calc(14px + env(safe-area-inset-top, 0px)); left:calc(14px + env(safe-area-inset-left, 0px));
+    z-index:20; width:46px; height:46px; border-radius:12px;
+    background:rgba(31,34,37,0.94);
+    border:1px solid rgb(51,55,58);
+    color:rgb(240,240,240); font-size:20px; line-height:1;
+    display:none; align-items:center; justify-content:center;
+    cursor:pointer; -webkit-tap-highlight-color:transparent;
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    box-shadow:0 4px 18px rgba(0,0,0,0.5);
+    transition:transform .12s ease, background .12s ease;
+  }
+  #menuBtn.show{ display:flex; }
+  #menuBtn:active{ transform:scale(0.94); background:rgba(60,191,232,0.22); }
+  #menuBtn.open{ background:rgba(60,191,232,0.28); border-color:rgb(60,191,232); }
+
+  /* Landscape recommendation overlay */
+  #rotatePrompt{
+    position:fixed; inset:0; z-index:100; display:none;
+    align-items:center; justify-content:center; flex-direction:column;
+    background:rgba(10,10,10,0.96); color:#f0f0f0; text-align:center; padding:24px;
+    backdrop-filter:blur(6px);
+  }
+  #rotatePrompt .icon{ font-size:64px; margin-bottom:18px; animation:rotateIcon 2s ease-in-out infinite; }
+  @keyframes rotateIcon{ 0%,100%{ transform:rotate(0deg); } 50%{ transform:rotate(90deg); } }
+  #rotatePrompt p{ font-size:15px; color:rgb(200,200,200); line-height:1.6; max-width:340px; margin:0; }
+
+  #startScreen{
+    position:fixed; inset:0; z-index:50;
+    display:flex; align-items:center; justify-content:center; flex-direction:column;
+    background:radial-gradient(circle at 30% 20%, #201f1d 0%, #121110 65%, #0a0a09 100%);
+    color:var(--panel-text); text-align:center; padding:24px; box-sizing:border-box;
+    overflow-y:auto;
+  }
+  #startScreen h1{
+    font-size:clamp(26px,5vw,44px); margin:0 0 6px 0; font-weight:600; letter-spacing:0.5px;
+  }
+  #startScreen .sub{ color:var(--panel-subtext); font-size:13px; letter-spacing:2px; margin-bottom:26px; text-transform:uppercase; }
+  #startScreen .badge{
+    display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:999px;
+    border:1px solid var(--panel-line); color:var(--panel-subtext); font-size:12px; margin-bottom:24px;
+  }
+  #startScreen .badge .dot{ width:8px; height:8px; border-radius:50%; background:var(--accent-cyan); }
+  #startBtn{
+    background:var(--accent-cyan); color:#141312; border:none; padding:15px 40px; font-size:16px;
+    font-weight:600; border-radius:10px; cursor:pointer; letter-spacing:0.3px;
+    box-shadow:0 8px 24px rgba(60,191,232,0.25); transition:transform .15s ease, box-shadow .15s ease;
+    margin-top:6px;
+  }
+  #startBtn:hover{ transform:translateY(-1px); box-shadow:0 10px 28px rgba(60,191,232,0.35); }
+  #startBtn:active{ transform:translateY(0px) scale(0.98); }
+  #startScreen .hint{ margin-top:20px; font-size:12px; color:var(--panel-subtext); max-width:440px; line-height:1.6; }
+  #startScreen .gesture-row{ display:flex; gap:16px; margin:24px 0 6px 0; flex-wrap:wrap; justify-content:center; }
+  #startScreen .gesture{ width:110px; }
+  #startScreen .gesture .g-icon{
+    width:52px; height:52px; border-radius:14px; background:var(--panel-bg-3); border:1px solid var(--panel-line);
+    display:flex; align-items:center; justify-content:center; margin:0 auto 8px auto; font-size:22px;
+  }
+  #startScreen .gesture .g-label{ font-size:11.5px; color:var(--panel-subtext); line-height:1.4; }
+  #errBox{ display:none; color:var(--accent-red); font-size:13px; margin-top:16px; max-width:440px; }
+
+  #loadingLine{ position:fixed; bottom:18px; left:0; right:0; text-align:center; color:var(--panel-subtext); font-size:12px; z-index:51; display:none; }
+
+  a#dlLink{ display:none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <video id="webcam" playsinline autoplay muted></video>
+  <canvas id="outputCanvas"></canvas>
+</div>
+
+<button id="menuBtn" aria-label="Toggle menu">☰</button>
+
+<div id="rotatePrompt">
+  <div class="icon">📱↔️</div>
+  <p>Please rotate your device to <strong>landscape</strong> for the best drawing experience.</p>
+</div>
+
+<div id="startScreen">
+  <div class="badge"><span class="dot"></span>TOUCHLESS WHITEBOARD</div>
+  <h1>AirDraw Pro</h1>
+  <div class="sub">Industrial Edition — draw in the air</div>
+
+  <div class="gesture-row">
+    <div class="gesture"><div class="g-icon">☝️</div><div class="g-label">Index finger up<br>Draw</div></div>
+    <div class="gesture"><div class="g-icon">✌️</div><div class="g-label">Index + middle<br>Select</div></div>
+    <div class="gesture"><div class="g-icon">🖐️</div><div class="g-label">Open hand<br>Eraser</div></div>
+    <div class="gesture"><div class="g-icon">✊</div><div class="g-label">Fist<br>Pen up</div></div>
+  </div>
+
+  <button id="startBtn">Enable Camera &amp; Start</button>
+  <div class="hint">
+    Your camera feed stays in your browser — nothing is uploaded. On mobile, this page will
+    request <strong>fullscreen landscape</strong>. You can tap the <strong>☰ menu</strong> to open
+    the sidebar, or use hand gestures as before. Requires <strong>HTTPS</strong> or
+    <strong>localhost</strong> for camera access.
+  </div>
+  <div id="errBox"></div>
+</div>
+
+<div id="loadingLine">Loading hand-tracking model…</div>
+
+<a id="dlLink"></a>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+// ==========================================================================
+// DEVICE DETECTION
+// ==========================================================================
+const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+
+function isSmallScreen(){
+  return window.innerWidth < 900 || (window.innerWidth < 1100 && window.innerHeight < 560);
+}
+
+// ==========================================================================
+// CONFIG
+// ==========================================================================
+const GESTURE_SMOOTHING = 12;              // slightly higher for extra stability
+// One-Euro tuning for smoother tracking: higher min cutoff => smoother idle,
+// lower beta => less reactive to speed => calmer overall.
+const EURO_MIN_CUTOFF = 2.4;
+const EURO_BETA = 0.35;
+const EURO_D_CUTOFF = 1.0;
+const EURO_MAX_DT = 0.05;
+
+const HOVER_SELECT_SECONDS = 0.6;
+const FINGER_EXTEND_RATIO = 1.20;
+const MAX_UNDO = 25;
+const ERASER_THICKNESS_GESTURE = 70;
+const ERASER_THICKNESS_MANUAL = 44;
+const STROKE_START_DIST = 3;
+const PIP_MARGIN = 22;
+
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17],
+];
+
+// ---- palette ----
+const PANEL_BG        = 'rgb(22,24,26)';
+const PANEL_BG_2      = 'rgb(31,34,37)';
+const PANEL_BG_3      = 'rgb(40,44,47)';
+const PANEL_LINE      = 'rgb(51,55,58)';
+const PANEL_TEXT      = 'rgb(240,240,240)';
+const PANEL_SUBTEXT   = 'rgb(140,143,145)';
+
+const ACCENT_CYAN     = 'rgb(60,191,232)';
+const ACCENT_AMBER    = 'rgb(245,170,30)';
+const ACCENT_RED      = 'rgb(220,70,70)';
+const ACCENT_GREEN    = 'rgb(120,210,110)';
+
+const BOARD_BG        = 'rgb(249,247,247)';
+const GRID_COLOR      = 'rgb(236,233,233)';
+
+const COLORS = {
+  BLACK:  'rgb(35,35,35)',
+  RED:    'rgb(235,60,60)',
+  GREEN:  'rgb(80,170,70)',
+  BLUE:   'rgb(40,120,225)',
+  YELLOW: 'rgb(235,200,50)',
+  PURPLE: 'rgb(150,70,185)',
+  ORANGE: 'rgb(245,130,30)',
+  TEAL:   'rgb(40,160,170)',
+};
+const COLOR_NAMES = Object.keys(COLORS);
+
+const GESTURE_STYLE = {
+  DRAW:  ['Drawing',   ACCENT_CYAN],
+  MENU:  ['Selecting', ACCENT_AMBER],
+  ERASE: ['Erasing',   ACCENT_RED],
+  IDLE:  ['Pen up',    PANEL_SUBTEXT],
+  NONE:  ['...',       PANEL_SUBTEXT],
+};
+
+// ==========================================================================
+// ONE-EURO FILTER (with max dt clamp)
+// ==========================================================================
+class LowPassFilter{
+  constructor(){ this._init=false; this.value=0; }
+  filter(value, alpha){
+    if(!this._init){ this.value=value; this._init=true; }
+    else{ this.value = alpha*value + (1-alpha)*this.value; }
+    return this.value;
+  }
+  reset(){ this._init=false; }
+}
+class OneEuroFilter{
+  constructor(minCutoff=EURO_MIN_CUTOFF, beta=EURO_BETA, dCutoff=EURO_D_CUTOFF, maxDt=EURO_MAX_DT){
+    this.minCutoff=minCutoff; this.beta=beta; this.dCutoff=dCutoff; this.maxDt=maxDt;
+    this.xFilter=new LowPassFilter(); this.dxFilter=new LowPassFilter(); this.lastTime=null;
+  }
+  static alpha(cutoff, dt){ const tau = 1/(2*Math.PI*cutoff); return 1/(1+tau/dt); }
+  reset(){ this.xFilter.reset(); this.dxFilter.reset(); this.lastTime=null; }
+  filter(value, timestamp){
+    let dt;
+    if(this.lastTime===null) dt = 1/30;
+    else dt = Math.min(Math.max(timestamp - this.lastTime, 1e-3), this.maxDt);
+    this.lastTime = timestamp;
+    const prevX = this.xFilter._init ? this.xFilter.value : value;
+    const dx = (value - prevX) / dt;
+    const edx = this.dxFilter.filter(dx, OneEuroFilter.alpha(this.dCutoff, dt));
+    const cutoff = this.minCutoff + this.beta*Math.abs(edx);
+    return this.xFilter.filter(value, OneEuroFilter.alpha(cutoff, dt));
+  }
+}
+
+// ==========================================================================
+// GESTURE RECOGNITION
+// ==========================================================================
+const TIPS = { thumb:4, index:8, middle:12, ring:16, pinky:20 };
+const KNUCKLES = { thumb:2, index:6, middle:10, ring:14, pinky:18 };
+
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+function fingersUp(landmarks){
+  const wrist = landmarks[0];
+  const up = {};
+  for(const name in TIPS){
+    const tip = landmarks[TIPS[name]];
+    const knuckle = landmarks[KNUCKLES[name]];
+    up[name] = dist(wrist,tip) > dist(wrist,knuckle) * FINGER_EXTEND_RATIO;
+  }
+  return up;
+}
+
+function classifyRawGesture(up){
+  if(up.index && !up.middle && !up.ring && !up.pinky) return 'DRAW';
+  if(up.index && up.middle && !up.ring && !up.pinky) return 'MENU';
+  if(up.index && up.middle && up.ring && up.pinky) return 'ERASE';
+  return 'IDLE';
+}
+
+class GestureSmoother{
+  constructor(window=GESTURE_SMOOTHING){ this.buf=[]; this.window=window; this.confirmed='IDLE'; }
+  update(raw){
+    this.buf.push(raw);
+    if(this.buf.length>this.window) this.buf.shift();
+    const counts={};
+    for(const g of this.buf) counts[g]=(counts[g]||0)+1;
+    let best=this.confirmed, bestCount=-1;
+    for(const g in counts){ if(counts[g]>bestCount){ best=g; bestCount=counts[g]; } }
+    if(bestCount > this.buf.length/2) this.confirmed = best;
+    return this.confirmed;
+  }
+}
+
+// ==========================================================================
+// SMALL HELPERS
+// ==========================================================================
+function easeOutCubic(t){ t=Math.min(Math.max(t,0),1); return 1-Math.pow(1-t,3); }
+function pulse(now, speed=2.2, lo=0.55, hi=1.0){
+  const s = (Math.sin(now*speed*2*Math.PI)+1)/2;
+  return lo + (hi-lo)*s;
+}
+function rgbToRgba(rgbStr, alpha){
+  const m = rgbStr.match(/[\d.]+/g);
+  return `rgba(${m[0]},${m[1]},${m[2]},${alpha})`;
+}
+function roundRect(ctx, x1,y1,x2,y2, radius, fillStyle, strokeStyle, lineWidth=1.5){
+  const w=x2-x1, h=y2-y1;
+  const r = Math.max(0, Math.min(radius, w/2, h/2));
+  ctx.beginPath();
+  ctx.moveTo(x1+r, y1);
+  ctx.arcTo(x2,y1,x2,y2,r);
+  ctx.arcTo(x2,y2,x1,y2,r);
+  ctx.arcTo(x1,y2,x1,y1,r);
+  ctx.arcTo(x1,y1,x2,y1,r);
+  ctx.closePath();
+  if(fillStyle){ ctx.fillStyle=fillStyle; ctx.fill(); }
+  if(strokeStyle){ ctx.strokeStyle=strokeStyle; ctx.lineWidth=lineWidth; ctx.stroke(); }
+}
+function pointInBox(px,py,box){ return px>=box[0] && px<=box[2] && py>=box[1] && py<=box[3]; }
+
+// ==========================================================================
+// APP STATE
+// ==========================================================================
+const video = document.getElementById('webcam');
+const canvas = document.getElementById('outputCanvas');
+const ctx = canvas.getContext('2d');
+const menuBtn = document.getElementById('menuBtn');
+const rotatePrompt = document.getElementById('rotatePrompt');
+
+let W=0, H=0;
+let SIDEBAR_WIDTH = 240;
+
+// Sidebar visibility (dynamic on small screens)
+let sidebarOpen = true;
+
+// persistent drawing surface
+let boardCanvas = document.createElement('canvas');
+let boardCtx = boardCanvas.getContext('2d');
+let gridCanvas = document.createElement('canvas');
+let gridCtx = gridCanvas.getContext('2d');
+
+let handLandmarker = null;
+let running = false;
+
+let activeColorName = 'BLACK';
+let activeColor = COLORS.BLACK;
+let activeTool = 'pen';
+let brushThickness = 6;
+let showHelp = false;
+
+let xp=0, yp=0;
+let shapeAnchor = null;
+let strokePendingPos = null;
+let filterX = new OneEuroFilter(), filterY = new OneEuroFilter();
+const smoother = new GestureSmoother();
+
+let hoverLabel = null, hoverStart = null;
+let lastToast = '', lastToastTime = 0;
+
+const undoStack = [], redoStack = [];
+
+let fpsHist = []; let prevTick = performance.now();
+let startTime = performance.now();
+
+let lastHandLandmarks = null;
+
+// ==========================================================================
+// DRAW-AREA / SIDEBAR HELPERS
+// ==========================================================================
+function isSidebarVisible(){
+  if (isSmallScreen()) return sidebarOpen;
+  return true;
+}
+function drawAreaStartX(){
+  return isSidebarVisible() ? SIDEBAR_WIDTH : 0;
+}
+function updateMenuBtnState(){
+  if (isSmallScreen()){
+    menuBtn.classList.add('show');
+    menuBtn.classList.toggle('open', sidebarOpen);
+    menuBtn.textContent = sidebarOpen ? '✕' : '☰';
+  } else {
+    menuBtn.classList.remove('show');
+    menuBtn.classList.remove('open');
+    sidebarOpen = true;
+  }
+}
+function updateOrientationPrompt(){
+  // Show prompt on touch devices in portrait orientation while app is running
+  const portrait = window.innerHeight > window.innerWidth;
+  if (running && isMobileUA && portrait){
+    rotatePrompt.style.display = 'flex';
+  } else {
+    rotatePrompt.style.display = 'none';
+  }
+}
+
+// ==========================================================================
+// SIZING
+// ==========================================================================
+function resizeAll(){
+  const rect = document.getElementById('app').getBoundingClientRect();
+  W = Math.max(320, Math.floor(rect.width));
+  H = Math.max(320, Math.floor(rect.height));
+
+  canvas.width = W; canvas.height = H;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+
+  // Responsive sidebar width
+  if (isSmallScreen()){
+    SIDEBAR_WIDTH = Math.round(Math.min(260, Math.max(200, W*0.34)));
+  } else {
+    SIDEBAR_WIDTH = Math.round(Math.min(260, Math.max(200, W*0.20)));
+  }
+
+  // preserve existing board content, scaled into new size
+  const oldBoard = boardCanvas;
+  const newBoard = document.createElement('canvas');
+  newBoard.width = W; newBoard.height = H;
+  const newCtx = newBoard.getContext('2d');
+  if(oldBoard.width>0 && oldBoard.height>0){
+    newCtx.drawImage(oldBoard, 0,0, oldBoard.width, oldBoard.height, 0,0, W,H);
+  }
+  boardCanvas = newBoard; boardCtx = newCtx;
+
+  gridCanvas.width = W; gridCanvas.height = H;
+  gridCtx = gridCanvas.getContext('2d');
+  gridCtx.fillStyle = BOARD_BG;
+  gridCtx.fillRect(0,0,W,H);
+  gridCtx.strokeStyle = GRID_COLOR;
+  gridCtx.lineWidth = 1;
+  const step = 42;
+  gridCtx.beginPath();
+  for(let x=0;x<W;x+=step){ gridCtx.moveTo(x+0.5,0); gridCtx.lineTo(x+0.5,H); }
+  for(let y=0;y<H;y+=step){ gridCtx.moveTo(0,y+0.5); gridCtx.lineTo(W,y+0.5); }
+  gridCtx.stroke();
+
+  buttons = buildButtonLayout();
+  updateMenuBtnState();
+  updateOrientationPrompt();
+}
+
+// ==========================================================================
+// SIDEBAR BUTTON LAYOUT
+// ==========================================================================
+let buttons = [];
+function buildButtonLayout(){
+  const list = [];
+  const pad = 18;
+  const x1 = pad, x2 = SIDEBAR_WIDTH - pad;
+
+  let y = 130;
+  const cols = 4, gap = 12;
+  const swatch = Math.floor((x2-x1-gap*(cols-1))/cols);
+  COLOR_NAMES.forEach((name,i)=>{
+    const col=i%cols, row=Math.floor(i/cols);
+    const bx1 = x1+col*(swatch+gap);
+    const by1 = y+row*(swatch+gap);
+    list.push({label:name, kind:'color', value:COLORS[name], box:[bx1,by1,bx1+swatch,by1+swatch]});
+  });
+  const rows = Math.ceil(COLOR_NAMES.length/cols);
+  y += rows*(swatch+gap) + 16;
+
+  const stepH = 40;
+  const halfW = Math.floor((x2-x1-10)/2);
+  list.push({label:'THINNER', kind:'thickness', value:-1, box:[x1,y,x1+halfW,y+stepH]});
+  list.push({label:'THICKER', kind:'thickness', value:1, box:[x1+halfW+10,y,x2,y+stepH]});
+  y += stepH + 30;
+
+  const toolH = 42;
+  const tHalf = Math.floor((x2-x1-10)/2);
+  const toolBoxes = [['PEN','pen'],['LINE','line'],['RECT','rect'],['CIRCLE','circle']];
+  toolBoxes.forEach(([label,value],i)=>{
+    const col=i%2, row=Math.floor(i/2);
+    const bx1 = x1+col*(tHalf+10);
+    const by1 = y+row*(toolH+10);
+    list.push({label, kind:'tool', value, box:[bx1,by1,bx1+tHalf,by1+toolH]});
+  });
+  const rowsT = Math.ceil(toolBoxes.length/2);
+  y += rowsT*(toolH+10) + 14;
+
+  const urH = 40;
+  list.push({label:'UNDO', kind:'action', value:'undo', box:[x1,y,x1+halfW,y+urH]});
+  list.push({label:'REDO', kind:'action', value:'redo', box:[x1+halfW+10,y,x2,y+urH]});
+  y += urH + 16;
+
+  const bigH = 48;
+  list.push({label:'CLEAR BOARD', kind:'action', value:'clear', box:[x1,y,x2,y+bigH]});
+  y += bigH+10;
+  list.push({label:'SAVE IMAGE', kind:'action', value:'save', box:[x1,y,x2,y+bigH]});
+  y += bigH+10;
+
+  return list;
+}
+
+// ==========================================================================
+// HISTORY
+// ==========================================================================
+function pushHistory(){
+  const snap = document.createElement('canvas');
+  snap.width = boardCanvas.width; snap.height = boardCanvas.height;
+  snap.getContext('2d').drawImage(boardCanvas,0,0);
+  undoStack.push(snap);
+  if(undoStack.length>MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+}
+function doUndo(){
+  if(undoStack.length===0) return false;
+  const snap = document.createElement('canvas');
+  snap.width = boardCanvas.width; snap.height = boardCanvas.height;
+  snap.getContext('2d').drawImage(boardCanvas,0,0);
+  redoStack.push(snap);
+  const prev = undoStack.pop();
+  boardCtx.clearRect(0,0,boardCanvas.width, boardCanvas.height);
+  boardCtx.drawImage(prev,0,0);
+  return true;
+}
+function doRedo(){
+  if(redoStack.length===0) return false;
+  const snap = document.createElement('canvas');
+  snap.width = boardCanvas.width; snap.height = boardCanvas.height;
+  snap.getContext('2d').drawImage(boardCanvas,0,0);
+  undoStack.push(snap);
+  const next = redoStack.pop();
+  boardCtx.clearRect(0,0,boardCanvas.width, boardCanvas.height);
+  boardCtx.drawImage(next,0,0);
+  return true;
+}
+
+// ==========================================================================
+// DRAWING PRIMITIVES
+// ==========================================================================
+function boardLine(x1,y1,x2,y2,color,thickness,erase=false){
+  boardCtx.save();
+  boardCtx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+  boardCtx.strokeStyle = erase ? 'rgba(0,0,0,1)' : color;
+  boardCtx.lineWidth = thickness;
+  boardCtx.lineCap = 'round';
+  boardCtx.lineJoin = 'round';
+  boardCtx.beginPath();
+  boardCtx.moveTo(x1,y1); boardCtx.lineTo(x2,y2);
+  boardCtx.stroke();
+  boardCtx.restore();
+}
+function commitShape(tool, p1, p2, color, thickness){
+  boardCtx.save();
+  boardCtx.strokeStyle = color;
+  boardCtx.lineWidth = thickness;
+  boardCtx.lineCap = 'round'; boardCtx.lineJoin='round';
+  if(tool==='line'){
+    boardCtx.beginPath(); boardCtx.moveTo(p1[0],p1[1]); boardCtx.lineTo(p2[0],p2[1]); boardCtx.stroke();
+  } else if(tool==='rect'){
+    boardCtx.strokeRect(Math.min(p1[0],p2[0]), Math.min(p1[1],p2[1]), Math.abs(p2[0]-p1[0]), Math.abs(p2[1]-p1[1]));
+  } else if(tool==='circle'){
+    const r = Math.hypot(p2[0]-p1[0], p2[1]-p1[1]);
+    boardCtx.beginPath(); boardCtx.arc(p1[0],p1[1], r, 0, Math.PI*2); boardCtx.stroke();
+  }
+  boardCtx.restore();
+}
+function drawShapePreview(g, tool, p1, p2, color, thickness){
+  g.save();
+  g.strokeStyle = color; g.lineWidth = thickness; g.lineCap='round'; g.lineJoin='round';
+  if(tool==='line'){ g.beginPath(); g.moveTo(p1[0],p1[1]); g.lineTo(p2[0],p2[1]); g.stroke(); }
+  else if(tool==='rect'){ g.strokeRect(Math.min(p1[0],p2[0]), Math.min(p1[1],p2[1]), Math.abs(p2[0]-p1[0]), Math.abs(p2[1]-p1[1])); }
+  else if(tool==='circle'){ const r=Math.hypot(p2[0]-p1[0],p2[1]-p1[1]); g.beginPath(); g.arc(p1[0],p1[1],r,0,Math.PI*2); g.stroke(); }
+  g.restore();
+}
+
+// ==========================================================================
+// SAVE
+// ==========================================================================
+function saveImage(){
+  const out = document.createElement('canvas');
+  out.width = boardCanvas.width; out.height = boardCanvas.height;
+  const oc = out.getContext('2d');
+  oc.drawImage(gridCanvas,0,0);
+  oc.drawImage(boardCanvas,0,0);
+  const link = document.getElementById('dlLink');
+  link.href = out.toDataURL('image/png');
+  link.download = `airdraw_${Date.now()}.png`;
+  link.click();
+}
+
+// ==========================================================================
+// TRIGGER BUTTON ACTION (shared by hover-select and manual tap)
+// ==========================================================================
+function triggerButtonAction(btn, now){
+  const {label, kind, value} = btn;
+  if(kind==='color'){ activeColorName=label; activeColor=value; }
+  else if(kind==='tool'){ activeTool=value; }
+  else if(kind==='thickness'){ brushThickness = Math.min(40, Math.max(2, brushThickness+value*2)); }
+  else if(kind==='action' && value==='undo'){ if(doUndo()){ lastToast='Undo'; lastToastTime=now; } }
+  else if(kind==='action' && value==='redo'){ if(doRedo()){ lastToast='Redo'; lastToastTime=now; } }
+  else if(kind==='action' && value==='clear'){
+    pushHistory(); boardCtx.clearRect(0,0,boardCanvas.width, boardCanvas.height);
+    lastToast='Board cleared'; lastToastTime=now;
+  }
+  else if(kind==='action' && value==='save'){
+    saveImage(); lastToast='Saved image'; lastToastTime=now;
+  }
+}
+
+// ==========================================================================
+// UI RENDERING
+// ==========================================================================
+function drawGaugeRing(cx,cy,r,progress,color,thickness=3){
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.strokeStyle=PANEL_LINE; ctx.lineWidth=thickness; ctx.stroke();
+  if(progress>0){
+    const start = -Math.PI/2;
+    const end = -Math.PI/2 + 2*Math.PI*easeOutCubic(progress);
+    ctx.beginPath(); ctx.arc(cx,cy,r,start,end); ctx.strokeStyle=color; ctx.lineWidth=thickness; ctx.stroke();
+  }
+}
+
+function drawSidebar(hoverProgress, confirmedGesture, handPresent, fps, now){
+  // Sidebar backing
+  roundRect(ctx, 0,0, SIDEBAR_WIDTH, H, 0, PANEL_BG, null);
+
+  const headerH = 92;
+  const grad = ctx.createLinearGradient(0,0,0,headerH);
+  grad.addColorStop(0, PANEL_BG_2); grad.addColorStop(1, PANEL_BG);
+  ctx.fillStyle = grad; ctx.fillRect(0,0,SIDEBAR_WIDTH, headerH);
+
+  ctx.strokeStyle = ACCENT_CYAN; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(28,30,9,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle = ACCENT_CYAN; ctx.beginPath(); ctx.arc(28,30,3,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle = PANEL_TEXT; ctx.font = "600 15px 'Segoe UI', sans-serif";
+  ctx.fillText('AIRDRAW PRO', 48, 30);
+  ctx.fillStyle = PANEL_SUBTEXT; ctx.font = "10px 'Segoe UI', sans-serif";
+  ctx.fillText('TOUCHLESS WHITEBOARD', 48, 46);
+
+  const dotColor = handPresent ? ACCENT_GREEN : 'rgb(90,90,90)';
+  const dotAlpha = handPresent ? pulse(now) : 1.0;
+  const dotR = 5 + (handPresent ? 2*(dotAlpha-0.55)/0.45 : 0);
+  ctx.fillStyle = dotColor; ctx.beginPath(); ctx.arc(SIDEBAR_WIDTH-20, 20, dotR, 0, Math.PI*2); ctx.fill();
+
+  ctx.strokeStyle = PANEL_LINE; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(18,headerH); ctx.lineTo(SIDEBAR_WIDTH-18, headerH); ctx.stroke();
+
+  const [gLabel, gColor] = GESTURE_STYLE[confirmedGesture] || GESTURE_STYLE.NONE;
+  roundRect(ctx, 18, headerH+12, SIDEBAR_WIDTH-18, headerH+38, 8, PANEL_BG_2, null);
+  ctx.fillStyle = gColor; ctx.beginPath(); ctx.arc(32, headerH+25, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = PANEL_TEXT; ctx.font = "11px 'Segoe UI', sans-serif";
+  ctx.fillText(gLabel.toUpperCase(), 44, headerH+29);
+
+  for(const btn of buttons){
+    const {label, kind, value, box} = btn;
+    const [x1,y1,x2,y2] = box;
+    const isActive = (kind==='color' && label===activeColorName) || (kind==='tool' && value===activeTool);
+    const isHover = (label===hoverLabel);
+
+    if(kind==='color'){
+      const cx=(x1+x2)/2, cy=(y1+y2)/2, r=(x2-x1)/2;
+      ctx.fillStyle = value; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+      if(isActive){
+        const glow = pulse(now,1.6,0.7,1.0);
+        const ringR = r+3+2*(glow-0.7)/0.3;
+        ctx.strokeStyle = ACCENT_CYAN; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,ringR,0,Math.PI*2); ctx.stroke();
+      } else if(isHover){
+        ctx.strokeStyle='rgb(210,210,210)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,r+2,0,Math.PI*2); ctx.stroke();
+      } else {
+        ctx.strokeStyle='rgb(70,68,65)'; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
+      }
+      if(isHover && hoverProgress>0) drawGaugeRing(cx,cy,r+7,hoverProgress,ACCENT_CYAN,2);
+    } else {
+      let base, textColor;
+      if(isActive){ base=ACCENT_CYAN; textColor='#121212'; }
+      else if(isHover){ base='rgb(66,62,57)'; textColor=PANEL_TEXT; }
+      else { base=PANEL_BG_3; textColor=PANEL_TEXT; }
+      roundRect(ctx, x1,y1,x2,y2, 9, base, isActive?null:PANEL_LINE, 1);
+      const fontSize = kind==='tool' ? 11 : 12;
+      ctx.font = `600 ${fontSize}px 'Segoe UI', sans-serif`;
+      ctx.fillStyle = textColor;
+      const tw = ctx.measureText(label).width;
+      const tx = x1 + Math.max(4, ((x2-x1)-tw)/2);
+      const ty = (y1+y2)/2 + fontSize/2 - 2;
+      ctx.fillText(label, tx, ty);
+
+      if(isHover && hoverProgress>0){
+        const eased = easeOutCubic(hoverProgress);
+        const barW = (x2-x1)*eased;
+        roundRect(ctx, x1, y2+4, Math.max(x1+4, x1+barW), y2+8, 2, ACCENT_CYAN, null);
+      }
+    }
+  }
+
+  for(const btn of buttons){
+    if(btn.kind==='thickness' && btn.value===1){
+      const [,ty1] = btn.box;
+      ctx.fillStyle = PANEL_SUBTEXT; ctx.font="10px 'Segoe UI', sans-serif";
+      ctx.fillText(`THICKNESS  ${brushThickness}px`, 18, ty1-10);
+      break;
+    }
+  }
+
+  const gy = H-66;
+  ctx.strokeStyle = PANEL_LINE; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(18,gy-14); ctx.lineTo(SIDEBAR_WIDTH-18, gy-14); ctx.stroke();
+  ctx.fillStyle = PANEL_TEXT; ctx.font="11px 'Segoe UI', sans-serif";
+  ctx.fillText(handPresent ? 'hand tracked' : 'hand not found', 20, gy+8);
+  ctx.fillStyle = PANEL_SUBTEXT; ctx.font="10px 'Segoe UI', sans-serif"; ctx.textAlign='right';
+  ctx.fillText(`${fps.toFixed(1)} FPS`, SIDEBAR_WIDTH-18, gy+8);
+  ctx.textAlign='left';
+  ctx.font="9.5px 'Segoe UI', sans-serif";
+  ctx.fillText('index = draw   index+middle = select', 20, gy+30);
+  ctx.fillText('open hand = erase', 20, gy+48);
+}
+
+function drawHelpOverlay(){
+  const boxW=Math.min(600, W-40), boxH=Math.min(440, H-40);
+  const x1=(W-boxW)/2, y1=(H-boxH)/2, x2=x1+boxW, y2=y1+boxH;
+  ctx.save();
+  ctx.globalAlpha = 0.97;
+  roundRect(ctx,x1,y1,x2,y2,16,'rgb(20,19,18)', ACCENT_CYAN, 1);
+  ctx.restore();
+
+  const lines = [
+    ["AirDraw Pro — Quick Guide", 17, PANEL_TEXT, 32, true],
+    ["Gestures", 14, ACCENT_CYAN, 24, true],
+    ["Index finger only        →  Draw / place shape", 12, PANEL_TEXT, 20, false],
+    ["Index + middle finger    →  Select (hover ~0.6s)", 12, PANEL_TEXT, 20, false],
+    ["Open hand (4 fingers)    →  Eraser follows your fingertip", 12, PANEL_TEXT, 20, false],
+    ["Fist                     →  Pen up / idle", 12, PANEL_TEXT, 24, false],
+    ["Input", 14, ACCENT_CYAN, 24, true],
+    ["Tap the ☰ menu button (small screens) to toggle the sidebar", 11.5, PANEL_TEXT, 20, false],
+    ["Click / tap any sidebar button to activate it directly", 11.5, PANEL_TEXT, 24, false],
+    ["Keyboard shortcuts", 14, ACCENT_CYAN, 24, true],
+    ["1-8 color   d pen   e eraser   l line   r rect   o circle", 11, PANEL_TEXT, 18, false],
+    ["c clear   s save   z undo   y redo   +/- thickness", 11, PANEL_TEXT, 18, false],
+    ["f fullscreen   h toggle this help   q / Esc quit", 11, PANEL_TEXT, 22, false],
+    ["Tip: On mobile, rotate to landscape for the best experience.", 11, PANEL_SUBTEXT, 20, false],
+  ];
+  let ty = y1+34;
+  for(const [text,size,color,dy,bold] of lines){
+    ctx.fillStyle = color;
+    ctx.font = `${bold?'600 ':''}${size}px 'Segoe UI', sans-serif`;
+    ctx.fillText(text, x1+26, ty);
+    ty += dy;
+  }
+}
+
+function overlayCameraPip(handPresent, now, handLandmarks){
+  const pw = Math.round(Math.min(230, W*0.26));
+  const ph = Math.round(pw*(170/230));
+  const x1 = W-PIP_MARGIN-pw, y1 = PIP_MARGIN+24;
+  const x2 = x1+pw, y2 = y1+ph;
+
+  const border=3;
+  roundRect(ctx, x1-border,y1-border,x2+border,y2+border, 12, 'rgb(18,18,18)', null);
+
+  ctx.save();
+  ctx.beginPath();
+  const r=10;
+  ctx.moveTo(x1+r,y1); ctx.arcTo(x2,y1,x2,y2,r); ctx.arcTo(x2,y2,x1,y2,r); ctx.arcTo(x1,y2,x1,y1,r); ctx.arcTo(x1,y1,x2,y1,r);
+  ctx.closePath(); ctx.clip();
+
+  ctx.save();
+  ctx.translate(x2,0); ctx.scale(-1,1);
+  ctx.drawImage(video, W-x2, y1, x2-x1, y2-y1);
+  ctx.restore();
+
+  if(handPresent && handLandmarks){
+    ctx.strokeStyle='rgb(90,220,130)'; ctx.lineWidth=2;
+    for(const [a,b] of HAND_CONNECTIONS){
+      const pa=handLandmarks[a], pb=handLandmarks[b];
+      const ax = x1 + (1-pa.x)*(x2-x1), ay = y1 + pa.y*(y2-y1);
+      const bx = x1 + (1-pb.x)*(x2-x1), by = y1 + pb.y*(y2-y1);
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+    }
+    ctx.fillStyle='rgb(60,170,255)';
+    for(const lm of handLandmarks){
+      const px = x1+(1-lm.x)*(x2-x1), py = y1+lm.y*(y2-y1);
+      ctx.beginPath(); ctx.arc(px,py,3,0,Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.restore();
+
+  const ringColor = handPresent ? ACCENT_GREEN : 'rgb(90,88,85)';
+  roundRect(ctx, x1-border,y1-border,x2+border,y2+border, 12, null, ringColor, 2);
+
+  const dotColor = handPresent ? ACCENT_RED : 'rgb(110,110,110)';
+  ctx.fillStyle = dotColor; ctx.beginPath(); ctx.arc(x1+4,y1-12,4,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = PANEL_TEXT; ctx.font="11px 'Segoe UI', sans-serif"; ctx.fillText('LIVE', x1+16, y1-8);
+  const status = handPresent ? 'TRACKED' : 'SEARCHING';
+  ctx.font="9.5px 'Segoe UI', sans-serif";
+  const tw = ctx.measureText(status).width;
+  ctx.fillStyle = ringColor;
+  ctx.fillText(status, x2-tw, y1-8);
+}
+
+function drawCursor(ix,iy,gesture,now){
+  let color;
+  if(gesture==='DRAW') color=ACCENT_CYAN;
+  else if(gesture==='MENU') color=ACCENT_AMBER;
+  else if(gesture==='ERASE') color=ACCENT_RED;
+  else color='rgb(160,160,160)';
+
+  const baseR = gesture==='ERASE' ? 22 : 10;
+  for(const [rad,a] of [[baseR+10,0.06],[baseR+5,0.10]]){
+    ctx.fillStyle = rgbToRgba(color,a);
+    ctx.beginPath(); ctx.arc(ix,iy,rad,0,Math.PI*2); ctx.fill();
+  }
+  ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ix,iy,baseR,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(ix,iy,2,0,Math.PI*2); ctx.fill();
+}
+
+function drawToast(text, elapsed, duration=2.0){
+  if(!text || elapsed>duration) return;
+  const fadeIn = Math.min(elapsed/0.18,1.0);
+  const fadeOut = Math.min((duration-elapsed)/0.35,1.0);
+  const alpha = Math.max(0, Math.min(fadeIn,fadeOut));
+  if(alpha<=0.01) return;
+
+  const rise = 14*(1-easeOutCubic(fadeIn));
+  ctx.font = "14px 'Segoe UI', sans-serif";
+  const tw = ctx.measureText(text).width;
+  const padX=18, padY=12;
+  const boxW = tw+padX*2, boxH = 20+padY*2;
+  const x1 = drawAreaStartX()+24;
+  const y2 = H-24+rise;
+  const y1 = y2-boxH;
+  const x2 = x1+boxW;
+
+  ctx.save();
+  ctx.globalAlpha = 0.85*alpha;
+  roundRect(ctx,x1,y1,x2,y2,10,'rgb(20,19,18)', null);
+  ctx.restore();
+  roundRect(ctx,x1,y1,x2,y2,10,null,ACCENT_CYAN,1);
+  ctx.fillStyle = `rgba(240,240,240,${alpha})`;
+  ctx.fillText(text, x1+padX, y2-padY);
+}
+
+// ==========================================================================
+// MAIN LOOP
+// ==========================================================================
+function handleMenuGesture(ix,iy,now){
+  shapeAnchor = null; xp=0; yp=0; strokePendingPos=null;
+  let hovered = null;
+  for(const btn of buttons){ if(pointInBox(ix,iy,btn.box)){ hovered=btn; break; } }
+
+  if(hovered){
+    const {label} = hovered;
+    if(hoverLabel === label){
+      const progress = (now - hoverStart)/1000/HOVER_SELECT_SECONDS;
+      if(progress >= 1.0){
+        triggerButtonAction(hovered, now);
+        hoverStart = now;
+      }
+    } else {
+      hoverLabel = label; hoverStart = now;
+    }
+  } else {
+    hoverLabel = null; hoverStart = null;
+  }
+}
+
+function processFrame(now){
+  ctx.clearRect(0,0,W,H);
+  ctx.drawImage(gridCanvas,0,0);
+  ctx.drawImage(boardCanvas,0,0);
+
+  let handPresent=false, ix=null, iy=null, rawGesture='IDLE';
+
+  if(handLandmarker && video.readyState>=2){
+    const result = handLandmarker.detectForVideo(video, now);
+    handPresent = !!(result.landmarks && result.landmarks.length>0);
+    if(handPresent){
+      const landmarks = result.landmarks[0];
+      lastHandLandmarks = landmarks;
+      const up = fingersUp(landmarks);
+      rawGesture = classifyRawGesture(up);
+
+      const indexTip = landmarks[TIPS.index];
+      const mirroredX = 1 - indexTip.x;
+      const rawX = Math.min(Math.max(mirroredX*W, 0), W-1);
+      const rawY = Math.min(Math.max(indexTip.y*H, 0), H-1);
+      ix = Math.round(filterX.filter(rawX, now/1000));
+      iy = Math.round(filterY.filter(rawY, now/1000));
+    } else {
+      lastHandLandmarks = null;
+      filterX.reset(); filterY.reset();
+    }
+  }
+
+  const gesture = smoother.update(rawGesture);
+  let shapePreview = null;
+  const drawStartX = drawAreaStartX();
+  const sidebarVisible = isSidebarVisible();
+
+  if(gesture==='MENU' && ix!==null && sidebarVisible){
+    handleMenuGesture(ix,iy,now);
+  } else if(gesture==='DRAW' && ix!==null && ix>drawStartX){
+    hoverLabel = null;
+    if(activeTool==='pen'){
+      if(strokePendingPos===null){ strokePendingPos=[ix,iy]; }
+      else{
+        const dx=ix-strokePendingPos[0], dy=iy-strokePendingPos[1];
+        if(Math.hypot(dx,dy) >= STROKE_START_DIST){
+          if(xp===0 && yp===0){ pushHistory(); [xp,yp]=strokePendingPos; }
+          boardLine(xp,yp,ix,iy,activeColor,brushThickness,false);
+          xp=ix; yp=iy;
+          strokePendingPos=null;
+        }
+      }
+    } else {
+      if(strokePendingPos===null){ strokePendingPos=[ix,iy]; }
+      else{
+        const dx=ix-strokePendingPos[0], dy=iy-strokePendingPos[1];
+        if(Math.hypot(dx,dy) >= STROKE_START_DIST){
+          shapeAnchor = strokePendingPos;
+          shapePreview = [activeTool, shapeAnchor, [ix,iy]];
+          strokePendingPos = null;
+        }
+      }
+    }
+  } else if(gesture==='ERASE' && ix!==null && ix>drawStartX){
+    hoverLabel = null; shapeAnchor = null;
+    if(strokePendingPos===null){ strokePendingPos=[ix,iy]; }
+    else{
+      const dx=ix-strokePendingPos[0], dy=iy-strokePendingPos[1];
+      if(Math.hypot(dx,dy) >= STROKE_START_DIST){
+        if(xp===0 && yp===0){ pushHistory(); [xp,yp]=strokePendingPos; }
+        boardLine(xp,yp,ix,iy,'#000',ERASER_THICKNESS_GESTURE,true);
+        xp=ix; yp=iy;
+        strokePendingPos=null;
+      }
+    }
+  } else {
+    if(shapeAnchor!==null && ix!==null){
+      pushHistory();
+      commitShape(activeTool, shapeAnchor, [ix,iy], activeColor, brushThickness);
+    }
+    shapeAnchor=null; xp=0; yp=0; hoverLabel=null; hoverStart=null; strokePendingPos=null;
+  }
+
+  if(shapePreview){
+    ctx.clearRect(0,0,W,H); ctx.drawImage(gridCanvas,0,0); ctx.drawImage(boardCanvas,0,0);
+    const [tool,p1,p2] = shapePreview;
+    drawShapePreview(ctx, tool, p1, p2, activeColor, brushThickness);
+  }
+
+  if(ix!==null) drawCursor(ix,iy,gesture,now/1000);
+
+  overlayCameraPip(handPresent, now/1000, lastHandLandmarks);
+
+  fpsHist.push(1000/Math.max(now-prevTick,1)); if(fpsHist.length>20) fpsHist.shift();
+  prevTick = now;
+  const fps = fpsHist.reduce((a,b)=>a+b,0)/fpsHist.length;
+
+  if(sidebarVisible){
+    let hoverProgress = 0;
+    if(hoverStart!==null) hoverProgress = (now-hoverStart)/1000/HOVER_SELECT_SECONDS;
+    drawSidebar(hoverProgress, gesture, handPresent, fps, now/1000);
+  }
+
+  drawToast(lastToast, (now-lastToastTime)/1000);
+
+  if(showHelp) drawHelpOverlay();
+}
+
+function loop(now){
+  if(!running) return;
+  try{ processFrame(now); } catch(e){ console.error(e); }
+  requestAnimationFrame(loop);
+}
+
+// ==========================================================================
+// MANUAL TAP / CLICK HANDLING FOR SIDEBAR BUTTONS
+// ==========================================================================
+function pointerCanvasCoords(e){
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  return [x,y];
+}
+
+canvas.addEventListener('pointerdown', (e)=>{
+  if(!running) return;
+  if(!isSidebarVisible()) return;
+  const [x,y] = pointerCanvasCoords(e);
+  // Only handle taps that land inside the sidebar region
+  if(x > SIDEBAR_WIDTH) return;
+  for(const btn of buttons){
+    if(pointInBox(x,y,btn.box)){
+      triggerButtonAction(btn, performance.now());
+      e.preventDefault();
+      e.stopPropagation();
+      // small visual pulse
+      hoverLabel = btn.label;
+      hoverStart = performance.now() - HOVER_SELECT_SECONDS*1000*0.5;
+      return;
+    }
+  }
+}, { passive:false });
+
+// Menu button toggle
+menuBtn.addEventListener('click', (e)=>{
+  e.preventDefault();
+  sidebarOpen = !sidebarOpen;
+  updateMenuBtnState();
+});
+
+// ==========================================================================
+// INPUT (keyboard + resize + orientation)
+// ==========================================================================
+window.addEventListener('resize', resizeAll);
+window.addEventListener('orientationchange', ()=>{
+  // small delay for the OS to finish rotating
+  setTimeout(resizeAll, 120);
+  setTimeout(updateOrientationPrompt, 200);
+});
+if (screen.orientation && screen.orientation.addEventListener){
+  screen.orientation.addEventListener('change', ()=>{ setTimeout(resizeAll, 80); setTimeout(updateOrientationPrompt, 150); });
+}
+
+window.addEventListener('keydown', (e)=>{
+  if(!running) return;
+  const now = performance.now();
+  switch(e.key.toLowerCase()){
+    case 'h': showHelp=!showHelp; break;
+    case 'f':
+      if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+      else document.exitFullscreen().catch(()=>{});
+      break;
+    case 'c':
+      pushHistory(); boardCtx.clearRect(0,0,boardCanvas.width,boardCanvas.height);
+      lastToast='Board cleared'; lastToastTime=now; break;
+    case 's': saveImage(); lastToast='Saved image'; lastToastTime=now; break;
+    case 'z': if(doUndo()){ lastToast='Undo'; lastToastTime=now; } break;
+    case 'y': if(doRedo()){ lastToast='Redo'; lastToastTime=now; } break;
+    case 'd': activeTool='pen'; break;
+    case 'e': activeTool='eraser'; break;
+    case 'l': activeTool='line'; break;
+    case 'r': activeTool='rect'; break;
+    case 'o': activeTool='circle'; break;
+    case 'escape': if(showHelp) showHelp=false; break;
+    case '+': case '=': brushThickness=Math.min(brushThickness+2,40); break;
+    case '-': case '_': brushThickness=Math.max(brushThickness-2,2); break;
+    default:
+      if(e.key>='1' && e.key<='8'){
+        const idx = parseInt(e.key,10)-1;
+        if(idx<COLOR_NAMES.length){ activeColorName=COLOR_NAMES[idx]; activeColor=COLORS[activeColorName]; }
+      }
+  }
+});
+
+// ==========================================================================
+// STARTUP
+// ==========================================================================
+async function tryLockLandscape(){
+  // Request fullscreen + orientation lock. Both may be denied by the browser;
+  // we silently fall back to a rotate prompt in that case.
+  try{
+    if (document.documentElement.requestFullscreen && !document.fullscreenElement){
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(()=>{});
+    }
+  } catch(e){}
+  try{
+    if (screen.orientation && screen.orientation.lock){
+      await screen.orientation.lock('landscape').catch(()=>{});
+    }
+  } catch(e){}
+}
+
+async function startApp(){
+  const startScreen = document.getElementById('startScreen');
+  const errBox = document.getElementById('errBox');
+  const loadingLine = document.getElementById('loadingLine');
+  loadingLine.style.display = 'block';
+
+  // On mobile, request landscape first (must be user-gesture driven)
+  if (isMobileUA){
+    await tryLockLandscape();
+    // Give the OS a moment to rotate
+    await new Promise(r => setTimeout(r, 250));
+    resizeAll();
+  }
+
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720} },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+
+    async function createLandmarker(delegate){
+      return HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate },
+        runningMode: 'VIDEO',
+        numHands: 1,
+        minHandDetectionConfidence: 0.7,
+        minHandPresenceConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+      });
+    }
+    try{ handLandmarker = await createLandmarker('GPU'); }
+    catch(e){ handLandmarker = await createLandmarker('CPU'); }
+
+    loadingLine.style.display = 'none';
+    startScreen.style.display = 'none';
+
+    // Default sidebar state based on device
+    sidebarOpen = !isSmallScreen();
+
+    resizeAll();
+    updateMenuBtnState();
+    updateOrientationPrompt();
+
+    running = true;
+    startTime = performance.now();
+    requestAnimationFrame(loop);
+  } catch(err){
+    loadingLine.style.display = 'none';
+    errBox.style.display = 'block';
+    errBox.textContent = 'Could not start camera / hand tracking: ' + (err && err.message ? err.message : err) +
+      '. Make sure you allowed camera access and are on HTTPS or localhost.';
+    console.error(err);
+  }
+}
+
+document.getElementById('startBtn').addEventListener('click', startApp);
+
+// Initialize visibility on load
+updateMenuBtnState();
+updateOrientationPrompt();
+</script>
+</body>
+</html>
