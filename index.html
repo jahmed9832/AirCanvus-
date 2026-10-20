@@ -184,14 +184,19 @@ const ERASER_THICKNESS_MANUAL = 44;
 const MIN_MOVE_DIST = 4.5; // Tremor deadband: prevents jitter lines when holding finger still
 const PIP_MARGIN = IS_MOBILE ? 12 : 22;
 
-// Detection throttle: 30 FPS inference on mobile prevents thermal throttling & battery drain
-const DETECT_INTERVAL_MS = IS_MOBILE ? 33 : 0;
+// Detection throttle: ~25 FPS inference on mobile prevents thermal throttling & low RAM lag
+const DETECT_INTERVAL_MS = IS_MOBILE ? 40 : 0;
 
 let currentFacingMode = 'user';
 
 function getCameraConstraints(){
   return IS_MOBILE ? {
-    video: { facingMode: currentFacingMode, width:{ideal:640}, height:{ideal:480}, frameRate:{ideal:30, max:30} },
+    video: {
+      facingMode: currentFacingMode,
+      width: { ideal: 480, max: 640 },
+      height: { ideal: 360, max: 480 },
+      frameRate: { ideal: 24, max: 30 }
+    },
     audio: false
   } : {
     video: { facingMode: currentFacingMode, width:{ideal:1280}, height:{ideal:720} },
@@ -480,8 +485,11 @@ function handleWindowResize(){
 
 function resizeAll(){
   const rect = document.getElementById('app').getBoundingClientRect();
-  W = Math.max(320, Math.floor(rect.width));
-  H = Math.max(320, Math.floor(rect.height));
+  const newW = Math.max(320, Math.floor(rect.width));
+  const newH = Math.max(320, Math.floor(rect.height));
+  if (W === newW && H === newH && canvas.width === W && canvas.height === H) return;
+  W = newW;
+  H = newH;
 
   canvas.width = W; canvas.height = H;
   canvas.style.width = W+'px'; canvas.style.height = H+'px';
@@ -1291,13 +1299,88 @@ window.addEventListener('keydown', (e)=>{
 });
 
 // ==========================================================================
-// FAST PARALLEL STARTUP (NO FREEZE, NO HANG)
+// FAST PARALLEL STARTUP & BACKGROUND PRELOADING (ULTRA-FAST & LOW-RAM OPTIMIZED)
 // ==========================================================================
 function updateLoading(percent, text){
   const bar = document.getElementById('loadingBarFill');
   const txt = document.getElementById('loadingStatusText');
   bar.style.width = `${percent}%`;
   txt.textContent = text;
+}
+
+let aiPreloadPromise = null;
+
+async function getCachedModelUrl(){
+  if ('caches' in window){
+    try {
+      const cache = await caches.open('airdraw-model-v2');
+      let resp = await cache.match(LOCAL_MODEL_URL);
+      if (!resp){
+        let fetchResp = await fetch(LOCAL_MODEL_URL).catch(() => null);
+        if (!fetchResp || !fetchResp.ok){
+          fetchResp = await fetch(CDN_MODEL_URL).catch(() => null);
+        }
+        if (fetchResp && fetchResp.ok){
+          await cache.put(LOCAL_MODEL_URL, fetchResp.clone());
+          resp = fetchResp;
+        }
+      }
+      if (resp){
+        const blob = await resp.blob();
+        return URL.createObjectURL(blob);
+      }
+    } catch(e){
+      console.warn('Cache API note:', e);
+    }
+  }
+  return LOCAL_MODEL_URL;
+}
+
+function preloadAIAssets(){
+  if (aiPreloadPromise) return aiPreloadPromise;
+  aiPreloadPromise = (async ()=>{
+    try {
+      const visionPromise = FilesetResolver.forVisionTasks(WASM_URL);
+      const modelPathPromise = getCachedModelUrl();
+      const [vision, modelPath] = await Promise.all([visionPromise, modelPathPromise]);
+      return { vision, modelPath };
+    } catch(e){
+      console.warn('Preload in background note:', e);
+      return null;
+    }
+  })();
+  return aiPreloadPromise;
+}
+
+// Start background download immediately when the page loads!
+preloadAIAssets();
+
+async function loadLandmarkerWithFallback(vision, modelAssetPath){
+  const createWithDelegate = (delegate) => HandLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath, delegate },
+    runningMode: 'VIDEO',
+    numHands: 1,
+    minHandDetectionConfidence: 0.6,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+
+  if (IS_MOBILE){
+    try {
+      // 2.5s GPU compilation race: on budget GPUs, immediately fall back to SIMD CPU without hanging!
+      const gpuTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('GPU timeout')), 2500));
+      return await Promise.race([createWithDelegate('GPU'), gpuTimeout]);
+    } catch(err){
+      console.warn('Using fast CPU (WASM SIMD) delegate on mobile for speed & low RAM:', err);
+      return await createWithDelegate('CPU');
+    }
+  } else {
+    try {
+      return await createWithDelegate('GPU');
+    } catch(e){
+      return await createWithDelegate('CPU');
+    }
+  }
 }
 
 async function startApp(){
@@ -1310,10 +1393,9 @@ async function startApp(){
   loadingContainer.style.display = 'flex';
   errBox.style.display = 'none';
 
-  updateLoading(15, 'Starting Camera & Loading Vision AI...');
+  updateLoading(20, 'Connecting Camera...');
 
   try{
-    // 1. Parallelize Camera Stream and Model Loader
     const cameraPromise = (async ()=>{
       const stream = await navigator.mediaDevices.getUserMedia(getCameraConstraints());
       video.srcObject = stream;
@@ -1321,35 +1403,20 @@ async function startApp(){
     })();
 
     const aiPromise = (async ()=>{
-      updateLoading(35, 'Connecting MediaPipe WASM...');
-      const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+      updateLoading(45, 'Loading AI Engine...');
+      let pre = await preloadAIAssets();
+      let vision = pre ? pre.vision : null;
+      let modelPath = pre ? pre.modelPath : null;
 
-      updateLoading(65, 'Loading Hand Landmark Model...');
-      let modelPath = LOCAL_MODEL_URL;
-      try {
-        const check = await fetch(LOCAL_MODEL_URL, { method: 'HEAD' });
-        if (!check.ok) modelPath = CDN_MODEL_URL;
-      } catch(e){
-        modelPath = CDN_MODEL_URL;
+      if (!vision){
+        vision = await FilesetResolver.forVisionTasks(WASM_URL);
+      }
+      if (!modelPath){
+        modelPath = await getCachedModelUrl();
       }
 
-      async function createLandmarker(delegate){
-        return HandLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: modelPath, delegate },
-          runningMode: 'VIDEO',
-          numHands: 1,
-          minHandDetectionConfidence: 0.6,
-          minHandPresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-        });
-      }
-
-      updateLoading(85, 'Compiling Neural Engine...');
-      try {
-        return await createLandmarker('GPU');
-      } catch(e){
-        return await createLandmarker('CPU');
-      }
+      updateLoading(75, 'Configuring Neural Pipeline...');
+      return await loadLandmarkerWithFallback(vision, modelPath);
     })();
 
     const [, landmarker] = await Promise.all([cameraPromise, aiPromise]);
@@ -1357,7 +1424,6 @@ async function startApp(){
 
     updateLoading(100, 'Ready!');
 
-    // Initialize display
     loadingContainer.style.display = 'none';
     startScreen.style.display = 'none';
 
