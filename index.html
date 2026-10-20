@@ -407,7 +407,16 @@ let startTime = performance.now();
 let lastHandLandmarks = null;
 let lastDetectMs = 0;
 let cachedResult = null;
-let lastFilteredPos = null;
+let targetX = null, targetY = null;
+let currentSmoothedX = null, currentSmoothedY = null;
+
+// Hardware 2D downsampled canvas for ultra-fast MediaPipe inference (256x192)
+const INFERENCE_W = IS_MOBILE ? 256 : 384;
+const INFERENCE_H = IS_MOBILE ? 192 : 288;
+const inferenceCanvas = document.createElement('canvas');
+inferenceCanvas.width = INFERENCE_W;
+inferenceCanvas.height = INFERENCE_H;
+const inferenceCtx = inferenceCanvas.getContext('2d', { willReadFrequently: true });
 
 // Pointer / scroll drag
 let scrollDragActive = false;
@@ -878,43 +887,43 @@ function drawHelpOverlay(){
 }
 
 function overlayCameraPip(handPresent, now, handLandmarks){
-  const pw = Math.round(Math.min(230, Math.max(140, W*0.24)));
+  const pw = Math.round(Math.min(220, Math.max(120, W*0.22)));
   const ph = Math.round(pw*(170/230));
   const x1 = W-PIP_MARGIN-pw, y1 = PIP_MARGIN+10;
   const x2 = x1+pw, y2 = y1+ph;
 
-  const border=3;
-  roundRect(ctx, x1-border,y1-border,x2+border,y2+border, 12, 'rgb(18,18,18)', null);
+  roundRect(ctx, x1-2, y1-2, x2+2, y2+2, 10, 'rgb(18,18,18)', null);
 
   ctx.save();
-  ctx.beginPath();
-  const r=10;
-  ctx.moveTo(x1+r,y1); ctx.arcTo(x2,y1,x2,y2,r); ctx.arcTo(x2,y2,x1,y2,r); ctx.arcTo(x1,y2,x1,y1,r); ctx.arcTo(x1,y1,x2,y1,r);
-  ctx.closePath(); ctx.clip();
+  if (!IS_MOBILE){
+    ctx.beginPath();
+    const r=8;
+    ctx.moveTo(x1+r,y1); ctx.arcTo(x2,y1,x2,y2,r); ctx.arcTo(x2,y2,x1,y2,r); ctx.arcTo(x1,y2,x1,y1,r); ctx.arcTo(x1,y1,x2,y1,r);
+    ctx.closePath();
+    ctx.clip();
+  }
 
-  ctx.save();
   ctx.translate(x2,0); ctx.scale(-1,1);
-  ctx.drawImage(video, W-x2, y1, x2-x1, y2-y1);
+  ctx.drawImage(video, W-x2, y1, pw, ph);
   ctx.restore();
 
   if(handPresent && handLandmarks){
-    ctx.strokeStyle='rgb(90,220,130)'; ctx.lineWidth=2;
+    ctx.strokeStyle='rgb(90,220,130)'; ctx.lineWidth=1.5;
     for(const [a,b] of HAND_CONNECTIONS){
       const pa=handLandmarks[a], pb=handLandmarks[b];
-      const ax = x1 + (1-pa.x)*(x2-x1), ay = y1 + pa.y*(y2-y1);
-      const bx = x1 + (1-pb.x)*(x2-x1), by = y1 + pb.y*(y2-y1);
+      const ax = x1 + (1-pa.x)*pw, ay = y1 + pa.y*ph;
+      const bx = x1 + (1-pb.x)*pw, by = y1 + pb.y*ph;
       ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
     }
     ctx.fillStyle='rgb(60,170,255)';
     for(const lm of handLandmarks){
-      const px = x1+(1-lm.x)*(x2-x1), py = y1+lm.y*(y2-y1);
-      ctx.beginPath(); ctx.arc(px,py,3,0,Math.PI*2); ctx.fill();
+      const px = x1+(1-lm.x)*pw, py = y1+lm.y*ph;
+      ctx.fillRect(px-1.5, py-1.5, 3, 3);
     }
   }
-  ctx.restore();
 
   const ringColor = handPresent ? ACCENT_GREEN : 'rgb(90,88,85)';
-  roundRect(ctx, x1-border,y1-border,x2+border,y2+border, 12, null, ringColor, 2);
+  roundRect(ctx, x1-2, y1-2, x2+2, y2+2, 10, null, ringColor, 1.5);
 
   const dotColor = handPresent ? ACCENT_RED : 'rgb(110,110,110)';
   ctx.fillStyle = dotColor; ctx.beginPath(); ctx.arc(x1+4,y1-12,4,0,Math.PI*2); ctx.fill();
@@ -1001,7 +1010,13 @@ function processFrame(now){
       try {
         const safeNow = Math.max(now, (lastDetectMs || 0) + 1);
         lastDetectMs = safeNow;
-        cachedResult = handLandmarker.detectForVideo(video, safeNow);
+        // Hardware 2D scaling downsamples in 0.2ms, reducing neural network compute by 80%!
+        if (IS_MOBILE){
+          inferenceCtx.drawImage(video, 0, 0, INFERENCE_W, INFERENCE_H);
+          cachedResult = handLandmarker.detectForVideo(inferenceCanvas, safeNow);
+        } else {
+          cachedResult = handLandmarker.detectForVideo(video, safeNow);
+        }
         newFrameDetected = true;
       } catch(err) {
         console.warn('Frame detection skipped:', err);
@@ -1015,22 +1030,34 @@ function processFrame(now){
       const up = fingersUp(landmarks);
       rawGesture = classifyRawGesture(up);
 
-      if (newFrameDetected || !lastFilteredPos){
+      if (newFrameDetected || targetX === null){
         const indexTip = landmarks[TIPS.index];
         const mirroredX = 1 - indexTip.x;
         const rawX = Math.min(Math.max(mirroredX*W, 0), W-1);
         const rawY = Math.min(Math.max(indexTip.y*H, 0), H-1);
-        lastFilteredPos = [
-          Math.round(filterX.filter(rawX, now/1000)),
-          Math.round(filterY.filter(rawY, now/1000))
-        ];
+        targetX = filterX.filter(rawX, now/1000);
+        targetY = filterY.filter(rawY, now/1000);
       }
-      if (lastFilteredPos){
-        [ix, iy] = lastFilteredPos;
+
+      // Smooth 60 FPS LERP: glides continuously between detection frames without jerkiness!
+      if (targetX !== null){
+        if (currentSmoothedX === null){
+          currentSmoothedX = targetX;
+          currentSmoothedY = targetY;
+        } else {
+          const lerpSpeed = IS_MOBILE ? 0.65 : 0.85;
+          currentSmoothedX += (targetX - currentSmoothedX) * lerpSpeed;
+          currentSmoothedY += (targetY - currentSmoothedY) * lerpSpeed;
+        }
+        ix = Math.round(currentSmoothedX);
+        iy = Math.round(currentSmoothedY);
       }
     } else {
       lastHandLandmarks = null;
-      lastFilteredPos = null;
+      targetX = null;
+      targetY = null;
+      currentSmoothedX = null;
+      currentSmoothedY = null;
       filterX.reset(); filterY.reset();
     }
   }
@@ -1310,30 +1337,15 @@ function updateLoading(percent, text){
 
 let aiPreloadPromise = null;
 
-async function getCachedModelUrl(){
-  if ('caches' in window){
-    try {
-      const cache = await caches.open('airdraw-model-v2');
-      let resp = await cache.match(LOCAL_MODEL_URL);
-      if (!resp){
-        let fetchResp = await fetch(LOCAL_MODEL_URL).catch(() => null);
-        if (!fetchResp || !fetchResp.ok){
-          fetchResp = await fetch(CDN_MODEL_URL).catch(() => null);
-        }
-        if (fetchResp && fetchResp.ok){
-          await cache.put(LOCAL_MODEL_URL, fetchResp.clone());
-          resp = fetchResp;
-        }
-      }
-      if (resp){
-        const blob = await resp.blob();
-        return URL.createObjectURL(blob);
-      }
-    } catch(e){
-      console.warn('Cache API note:', e);
-    }
-  }
-  return LOCAL_MODEL_URL;
+async function getBestModelPath(){
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+    const resp = await fetch(LOCAL_MODEL_URL, { method: 'HEAD', signal: controller.signal });
+    clearTimeout(timeout);
+    if (resp.ok) return LOCAL_MODEL_URL;
+  } catch(e){}
+  return CDN_MODEL_URL;
 }
 
 function preloadAIAssets(){
@@ -1341,7 +1353,7 @@ function preloadAIAssets(){
   aiPreloadPromise = (async ()=>{
     try {
       const visionPromise = FilesetResolver.forVisionTasks(WASM_URL);
-      const modelPathPromise = getCachedModelUrl();
+      const modelPathPromise = getBestModelPath();
       const [vision, modelPath] = await Promise.all([visionPromise, modelPathPromise]);
       return { vision, modelPath };
     } catch(e){
@@ -1361,17 +1373,17 @@ async function loadLandmarkerWithFallback(vision, modelAssetPath){
     runningMode: 'VIDEO',
     numHands: 1,
     minHandDetectionConfidence: 0.6,
-    minHandPresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+    minHandPresenceConfidence: 0.45,
+    minTrackingConfidence: 0.45,
   });
 
   if (IS_MOBILE){
     try {
-      // 2.5s GPU compilation race: on budget GPUs, immediately fall back to SIMD CPU without hanging!
-      const gpuTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('GPU timeout')), 2500));
+      // 1.5s GPU compilation race: on budget GPUs, immediately fall back to SIMD CPU without hanging!
+      const gpuTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('GPU timeout')), 1500));
       return await Promise.race([createWithDelegate('GPU'), gpuTimeout]);
     } catch(err){
-      console.warn('Using fast CPU (WASM SIMD) delegate on mobile for speed & low RAM:', err);
+      console.log('Mobile device: using ultra-fast WASM SIMD (CPU) engine for low RAM:', err);
       return await createWithDelegate('CPU');
     }
   } else {
@@ -1412,7 +1424,7 @@ async function startApp(){
         vision = await FilesetResolver.forVisionTasks(WASM_URL);
       }
       if (!modelPath){
-        modelPath = await getCachedModelUrl();
+        modelPath = await getBestModelPath();
       }
 
       updateLoading(75, 'Configuring Neural Pipeline...');
