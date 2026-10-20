@@ -6,6 +6,12 @@
 <meta name="theme-color" content="#16181a" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <title>AirDraw Pro — Touchless AI Whiteboard</title>
+
+<!-- Start network work as early as possible -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+<link rel="preconnect" href="https://storage.googleapis.com" crossorigin />
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs" crossorigin />
+
 <style>
   :root{
     --panel-bg:      rgb(22,24,26);
@@ -26,14 +32,13 @@
   }
   #app{ position:fixed; inset:0; }
   #outputCanvas{ position:absolute; inset:0; width:100%; height:100%; display:block; background:var(--panel-bg); touch-action:none; }
-  video{ display:none; }
+  /* NOT display:none — hidden videos can stop decoding on iOS/Android and kill tracking */
+  video{ position:fixed; left:0; top:0; width:2px; height:2px; opacity:0; pointer-events:none; z-index:-1; }
 
-  /* Floating controls container (top-left) */
   #topControls{
     position:fixed; top:calc(12px + env(safe-area-inset-top, 0px)); left:calc(12px + env(safe-area-inset-left, 0px));
     z-index:25; display:flex; gap:8px; align-items:center;
   }
-
   .floating-btn{
     width:44px; height:44px; border-radius:12px;
     background:rgba(31,34,37,0.92);
@@ -41,17 +46,14 @@
     color:rgb(240,240,240); font-size:18px; line-height:1;
     display:flex; align-items:center; justify-content:center;
     cursor:pointer; -webkit-tap-highlight-color:transparent;
-    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
     box-shadow:0 4px 18px rgba(0,0,0,0.5);
     transition:transform .12s ease, background .12s ease, border-color .12s ease;
   }
   .floating-btn:active{ transform:scale(0.92); background:rgba(60,191,232,0.25); border-color:var(--accent-cyan); }
   .floating-btn.active{ background:rgba(60,191,232,0.28); border-color:var(--accent-cyan); color:var(--accent-cyan); }
-
   #menuBtn{ display:none; }
   #menuBtn.show{ display:flex; }
 
-  /* Start Screen */
   #startScreen{
     position:fixed; inset:0; z-index:50;
     display:flex; align-items:center; justify-content:center; flex-direction:column;
@@ -59,9 +61,7 @@
     color:var(--panel-text); text-align:center; padding:24px; box-sizing:border-box;
     overflow-y:auto;
   }
-  #startScreen h1{
-    font-size:clamp(28px,5vw,46px); margin:0 0 6px 0; font-weight:700; letter-spacing:0.5px;
-  }
+  #startScreen h1{ font-size:clamp(28px,5vw,46px); margin:0 0 6px 0; font-weight:700; letter-spacing:0.5px; }
   #startScreen .sub{ color:var(--panel-subtext); font-size:13px; letter-spacing:2px; margin-bottom:24px; text-transform:uppercase; }
   #startScreen .badge{
     display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:999px;
@@ -76,6 +76,7 @@
   }
   #startBtn:hover{ transform:translateY(-1px); box-shadow:0 10px 28px rgba(60,191,232,0.45); }
   #startBtn:active{ transform:translateY(0px) scale(0.98); }
+  #startBtn:disabled{ opacity:.6; cursor:default; }
 
   #startScreen .gesture-row{ display:flex; gap:14px; margin:20px 0 10px 0; flex-wrap:wrap; justify-content:center; }
   #startScreen .gesture{ width:110px; }
@@ -85,25 +86,15 @@
   }
   #startScreen .gesture .g-label{ font-size:11.5px; color:var(--panel-subtext); line-height:1.4; }
 
-  /* Loading progress bar on start screen */
-  #loadingContainer{
-    display:none; width:280px; margin-top:20px; flex-direction:column; align-items:center; gap:8px;
-  }
-  .progress-bar-bg{
-    width:100%; height:6px; background:rgba(255,255,255,0.12); border-radius:6px; overflow:hidden;
-  }
-  .progress-bar-fill{
-    height:100%; width:0%; background:var(--accent-cyan); border-radius:6px; transition:width 0.25s ease;
-  }
-  #loadingStatusText{
-    font-size:12px; color:var(--panel-subtext); font-family:monospace;
-  }
+  #loadingContainer{ display:flex; width:280px; margin-top:20px; flex-direction:column; align-items:center; gap:8px; }
+  .progress-bar-bg{ width:100%; height:6px; background:rgba(255,255,255,0.12); border-radius:6px; overflow:hidden; }
+  .progress-bar-fill{ height:100%; width:0%; background:var(--accent-cyan); border-radius:6px; transition:width 0.25s ease; }
+  #loadingStatusText{ font-size:12px; color:var(--panel-subtext); font-family:monospace; }
 
   #errBox{
     display:none; color:var(--accent-red); font-size:13px; margin-top:16px; max-width:440px; line-height:1.5;
     background:rgba(220,70,70,0.12); padding:10px 14px; border-radius:8px; border:1px solid rgba(220,70,70,0.3);
   }
-
   .hint{ margin-top:18px; font-size:12px; color:var(--panel-subtext); max-width:440px; line-height:1.5; }
   a#dlLink{ display:none; }
 </style>
@@ -135,10 +126,8 @@
   <button id="startBtn">Enable Camera &amp; Start</button>
 
   <div id="loadingContainer">
-    <div class="progress-bar-bg">
-      <div id="loadingBarFill" class="progress-bar-fill"></div>
-    </div>
-    <div id="loadingStatusText">Initializing AI Engine...</div>
+    <div class="progress-bar-bg"><div id="loadingBarFill" class="progress-bar-fill"></div></div>
+    <div id="loadingStatusText">Preparing AI engine...</div>
   </div>
 
   <div id="errBox"></div>
@@ -152,7 +141,7 @@
 <a id="dlLink"></a>
 
 <script type="module">
-import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
 // ==========================================================================
 // DEVICE DETECTION
@@ -166,40 +155,36 @@ function isSmallScreen(){
 }
 
 // ==========================================================================
-// CONFIG (Original proven high-precision tuning)
+// CONFIG
 // ==========================================================================
-const GESTURE_SMOOTHING = IS_MOBILE ? 8 : 10;
-// Lower minCutoff (1.0 Hz) locks stationary position and wipes out hand tremor
-// Higher beta (0.50) provides instant lag-free tracking when moving
+const GESTURE_SMOOTHING = 5;          // frames (counted per *detection*, not per render frame)
 const EURO_MIN_CUTOFF = 1.0;
 const EURO_BETA = 0.50;
 const EURO_D_CUTOFF = 1.0;
-const EURO_MAX_DT = 0.05;
+const EURO_MAX_DT = 0.1;
+
+const CURSOR_LERP_TAU = IS_MOBILE ? 0.022 : 0.014;  // seconds; frame-rate independent glide
+const HAND_LOST_GRACE = 5;            // detections a hand may vanish before the stroke is dropped
+const MAP_MARGIN = 0.08;              // use central 84% of camera view -> easy to reach screen edges
 
 const HOVER_SELECT_SECONDS = 0.6;
 const FINGER_EXTEND_RATIO = 1.20;
 const MAX_UNDO = 25;
 const ERASER_THICKNESS_GESTURE = 70;
 const ERASER_THICKNESS_MANUAL = 44;
-const MIN_MOVE_DIST = 4.5; // Tremor deadband: prevents jitter lines when holding finger still
+const MIN_MOVE_DIST = 4.0;
 const PIP_MARGIN = IS_MOBILE ? 12 : 22;
-
-// Detection throttle: ~25 FPS inference on mobile prevents thermal throttling & low RAM lag
-const DETECT_INTERVAL_MS = IS_MOBILE ? 40 : 0;
 
 let currentFacingMode = 'user';
 
 function getCameraConstraints(){
-  return IS_MOBILE ? {
+  return {
     video: {
       facingMode: currentFacingMode,
-      width: { ideal: 480, max: 640 },
-      height: { ideal: 360, max: 480 },
-      frameRate: { ideal: 24, max: 30 }
+      width:  { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: IS_MOBILE ? { ideal: 30, max: 30 } : { ideal: 60, max: 60 }
     },
-    audio: false
-  } : {
-    video: { facingMode: currentFacingMode, width:{ideal:1280}, height:{ideal:720} },
     audio: false
   };
 }
@@ -207,6 +192,7 @@ function getCameraConstraints(){
 const LOCAL_MODEL_URL = "./hand_landmarker.task";
 const CDN_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL_CACHE_NAME = 'airdraw-model-v1';
 
 const HAND_CONNECTIONS = [
   [0,1],[1,2],[2,3],[3,4],
@@ -254,7 +240,7 @@ const GESTURE_STYLE = {
 };
 
 // ==========================================================================
-// ONE-EURO FILTER (EXACT PROVEN IMPLEMENTATION)
+// ONE-EURO FILTER
 // ==========================================================================
 class LowPassFilter{
   constructor(){ this._init=false; this.value=0; }
@@ -287,12 +273,13 @@ class OneEuroFilter{
 }
 
 // ==========================================================================
-// GESTURE RECOGNITION (PROVEN 100% ACCURATE RATIO)
+// GESTURE RECOGNITION (aspect-ratio corrected so portrait/landscape both work)
 // ==========================================================================
 const TIPS = { thumb:4, index:8, middle:12, ring:16, pinky:20 };
 const KNUCKLES = { thumb:2, index:6, middle:10, ring:14, pinky:18 };
+let ASPECT = 4/3; // video width / height
 
-function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+function dist(a,b){ return Math.hypot((a.x-b.x)*ASPECT, a.y-b.y); }
 
 function fingersUp(landmarks){
   const wrist = landmarks[0];
@@ -314,6 +301,7 @@ function classifyRawGesture(up){
 
 class GestureSmoother{
   constructor(window=GESTURE_SMOOTHING){ this.buf=[]; this.window=window; this.confirmed='IDLE'; }
+  reset(){ this.buf=[]; this.confirmed='IDLE'; }
   update(raw){
     this.buf.push(raw);
     if(this.buf.length>this.window) this.buf.shift();
@@ -329,6 +317,7 @@ class GestureSmoother{
 // ==========================================================================
 // HELPERS
 // ==========================================================================
+function clamp(v,lo,hi){ return v<lo?lo:(v>hi?hi:v); }
 function easeOutCubic(t){ t=Math.min(Math.max(t,0),1); return 1-Math.pow(1-t,3); }
 function pulse(now, speed=2.2, lo=0.55, hi=1.0){
   const s = (Math.sin(now*speed*2*Math.PI)+1)/2;
@@ -354,6 +343,123 @@ function roundRect(ctx, x1,y1,x2,y2, radius, fillStyle, strokeStyle, lineWidth=1
 function pointInBox(px,py,box){ return px>=box[0] && px<=box[2] && py>=box[1] && py<=box[3]; }
 
 // ==========================================================================
+// AI ENGINE — starts loading the moment the page opens (before the Start tap)
+// ==========================================================================
+const loadBar = document.getElementById('loadingBarFill');
+const loadTxt = document.getElementById('loadingStatusText');
+function updateLoading(percent, text){
+  loadBar.style.width = `${percent}%`;
+  loadTxt.textContent = text;
+}
+
+// Warm the browser HTTP cache for the wasm runtime (parallel with the model download)
+function prefetchWasm(){
+  for(const f of ['vision_wasm_internal.js','vision_wasm_internal.wasm']){
+    fetch(`${WASM_URL}/${f}`, { mode:'cors' }).catch(()=>{});
+  }
+}
+
+async function fetchBytesWithProgress(url, onProgress){
+  const resp = await fetch(url);
+  if(!resp.ok) throw new Error('HTTP '+resp.status);
+  const total = parseInt(resp.headers.get('content-length')||'0',10);
+  if(!resp.body || !total){
+    const b = new Uint8Array(await resp.arrayBuffer());
+    onProgress(1); return b;
+  }
+  const reader = resp.body.getReader();
+  const chunks = []; let got = 0;
+  for(;;){
+    const {done, value} = await reader.read();
+    if(done) break;
+    chunks.push(value); got += value.length;
+    onProgress(Math.min(1, got/total));
+  }
+  const out = new Uint8Array(got); let o = 0;
+  for(const c of chunks){ out.set(c,o); o += c.length; }
+  return out;
+}
+
+async function loadModelBytes(onProgress){
+  // 1) Cache API — instant on every visit after the first
+  try{
+    const cache = await caches.open(MODEL_CACHE_NAME);
+    const hit = await cache.match(CDN_MODEL_URL);
+    if(hit){
+      const b = new Uint8Array(await hit.arrayBuffer());
+      if(b.length > 1e6){ onProgress(1); return b; }
+    }
+  }catch(e){}
+
+  // 2) Optional local copy next to the html (fastest first-time load)
+  try{
+    const b = await fetchBytesWithProgress(LOCAL_MODEL_URL, onProgress);
+    if(b.length > 1e6) return b;
+  }catch(e){}
+
+  // 3) CDN, then store for next time
+  const bytes = await fetchBytesWithProgress(CDN_MODEL_URL, onProgress);
+  try{
+    const cache = await caches.open(MODEL_CACHE_NAME);
+    await cache.put(CDN_MODEL_URL, new Response(bytes.slice()));
+  }catch(e){}
+  return bytes;
+}
+
+function createLandmarker(vision, bytes, delegate){
+  return HandLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetBuffer: bytes.slice(), delegate },
+    runningMode: 'VIDEO',
+    numHands: 1,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+}
+
+async function createBestLandmarker(vision, bytes){
+  try{
+    const lm = await createLandmarker(vision, bytes, 'GPU');
+    return { lm, delegate:'GPU' };
+  }catch(e){
+    console.log('GPU delegate unavailable, using CPU:', e);
+    const lm = await createLandmarker(vision, bytes, 'CPU');
+    return { lm, delegate:'CPU' };
+  }
+}
+
+// Compile shaders / allocate buffers now so the first real frame isn't slow
+function warmUp(lm){
+  try{
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 192;
+    const g = c.getContext('2d'); g.fillStyle='#888'; g.fillRect(0,0,256,192);
+    lm.detectForVideo(c, 1);
+    lm.detectForVideo(c, 2);
+  }catch(e){ console.warn('warmup skipped', e); }
+}
+
+let engine = null; // {vision, bytes, lm, delegate}
+let userStarted = false;
+
+const enginePromise = (async ()=>{
+  prefetchWasm();
+  updateLoading(3, 'Downloading AI model...');
+  const [vision, bytes] = await Promise.all([
+    FilesetResolver.forVisionTasks(WASM_URL),
+    loadModelBytes(p => updateLoading(5 + p*70, `Downloading AI model... ${Math.round(p*100)}%`))
+  ]);
+  updateLoading(80, 'Starting neural engine...');
+  const { lm, delegate } = await createBestLandmarker(vision, bytes);
+  updateLoading(94, 'Warming up...');
+  warmUp(lm);
+  engine = { vision, bytes, lm, delegate };
+  updateLoading(userStarted ? 97 : 100, userStarted ? 'Almost ready...' : 'AI ready — tap Start');
+  return engine;
+})();
+enginePromise.catch(err => console.error('Engine preload failed:', err));
+
+// ==========================================================================
 // APP STATE
 // ==========================================================================
 const video = document.getElementById('webcam');
@@ -367,14 +473,12 @@ let W=0, H=0;
 let SIDEBAR_WIDTH = 240;
 let sidebarOpen = !isSmallScreen();
 
-// Sidebar scroll state
 let sidebarScrollY = 0;
 let sidebarContentHeight = 0;
 let sidebarViewport = { top: 0, bottom: 0, height: 0 };
 
-// Persistent drawing surface (exact 1:1 pixel coords)
 let boardCanvas = document.createElement('canvas');
-let boardCtx = boardCanvas.getContext('2d', { willReadFrequently: false });
+let boardCtx = boardCanvas.getContext('2d');
 let gridCanvas = document.createElement('canvas');
 let gridCtx = gridCanvas.getContext('2d', { alpha: false });
 
@@ -402,28 +506,50 @@ let lastToast = '', lastToastTime = 0;
 const undoStack = [], redoStack = [];
 
 let fpsHist = []; let prevTick = performance.now();
-let startTime = performance.now();
 
+// Hand tracking state
 let lastHandLandmarks = null;
-let lastDetectMs = 0;
-let cachedResult = null;
+let handTracked = false;
+let lostFrames = 0;
+let confirmedGesture = 'IDLE';
 let targetX = null, targetY = null;
 let currentSmoothedX = null, currentSmoothedY = null;
 
-// Hardware 2D downsampled canvas for ultra-fast MediaPipe inference (256x192)
-const INFERENCE_W = IS_MOBILE ? 256 : 384;
-const INFERENCE_H = IS_MOBILE ? 192 : 288;
+// Detection scheduling
+let lastDetectMs = 2;
+let lastVideoTime = -1;
+let newVideoFrame = false;
+let rvfcArmed = false;
+let detectErrCount = 0;
+let cpuFallbackBusy = false;
+
+// Down-scaled input for the model (GPU-backed canvas: NO willReadFrequently)
 const inferenceCanvas = document.createElement('canvas');
-inferenceCanvas.width = INFERENCE_W;
-inferenceCanvas.height = INFERENCE_H;
-const inferenceCtx = inferenceCanvas.getContext('2d', { willReadFrequently: true });
+const inferenceCtx = inferenceCanvas.getContext('2d');
+let lastVW = 0, lastVH = 0;
+
+function ensureInferenceSize(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(vw === lastVW && vh === lastVH) return;
+  lastVW = vw; lastVH = vh;
+  const longSide = IS_MOBILE ? 256 : 320;
+  const s = longSide / Math.max(vw, vh);
+  inferenceCanvas.width  = Math.max(64, Math.round(vw*s));
+  inferenceCanvas.height = Math.max(64, Math.round(vh*s));
+  ASPECT = vw / vh;
+}
+
+function armFrameCallback(){
+  if(rvfcArmed || !('requestVideoFrameCallback' in video)) return;
+  rvfcArmed = true;
+  const cb = ()=>{ newVideoFrame = true; video.requestVideoFrameCallback(cb); };
+  video.requestVideoFrameCallback(cb);
+}
 
 // Pointer / scroll drag
 let scrollDragActive = false;
 let scrollDragStartClientY = 0;
 let scrollDragStartScroll = 0;
-
-// Direct touch drawing fallback
 let touchDrawingActive = false;
 let touchPrevPos = null;
 
@@ -447,44 +573,34 @@ function updateMenuBtnState(){
     menuBtn.classList.remove('open');
     sidebarOpen = true;
   }
-
-  if (IS_MOBILE){
-    camFlipBtn.style.display = 'flex';
-  }
+  if (IS_MOBILE){ camFlipBtn.style.display = 'flex'; }
 }
 
-// ==========================================================================
-// SIDEBAR SCROLL / VIEWPORT
-// ==========================================================================
 function computeSidebarViewport(){
   const gestureBottom = SIDEBAR_HEADER_H + 38;
   const top = gestureBottom + 14;
   const bottom = H - 80;
   sidebarViewport = { top, bottom, height: Math.max(60, bottom - top) };
 }
-
 function setSidebarScroll(y){
   const maxScroll = Math.max(0, sidebarContentHeight - sidebarViewport.height);
   sidebarScrollY = Math.max(0, Math.min(maxScroll, y));
 }
-
 function getButtonScreenBox(btn){
   const [x1,y1,x2,y2] = btn.box;
   const off = sidebarViewport.top - sidebarScrollY;
   return [x1, y1+off, x2, y2+off];
 }
-
 function hitTestSidebar(px, py){
   if (py < sidebarViewport.top || py > sidebarViewport.bottom) return null;
   for(const btn of buttons){
-    const sbox = getButtonScreenBox(btn);
-    if (pointInBox(px, py, sbox)) return btn;
+    if (pointInBox(px, py, getButtonScreenBox(btn))) return btn;
   }
   return null;
 }
 
 // ==========================================================================
-// SIZING (Preserves 100% drawing accuracy & aspect)
+// SIZING
 // ==========================================================================
 let resizeDebounceTimer = null;
 function handleWindowResize(){
@@ -509,7 +625,6 @@ function resizeAll(){
     SIDEBAR_WIDTH = Math.round(Math.min(260, Math.max(200, W*0.20)));
   }
 
-  // Preserve existing drawing perfectly
   const oldBoard = boardCanvas;
   const newBoard = document.createElement('canvas');
   newBoard.width = W; newBoard.height = H;
@@ -519,7 +634,6 @@ function resizeAll(){
   }
   boardCanvas = newBoard; boardCtx = newCtx;
 
-  // Grid
   gridCanvas.width = W; gridCanvas.height = H;
   gridCtx = gridCanvas.getContext('2d', { alpha: false });
   gridCtx.fillStyle = BOARD_BG;
@@ -552,7 +666,6 @@ function buildButtonLayout(){
   const x1 = pad, x2 = SIDEBAR_WIDTH - pad;
   let y = 0;
 
-  // Colors
   const cols = 4, gap = 12;
   const swatch = Math.floor((x2-x1-gap*(cols-1))/cols);
   COLOR_NAMES.forEach((name,i)=>{
@@ -564,14 +677,12 @@ function buildButtonLayout(){
   const rows = Math.ceil(COLOR_NAMES.length/cols);
   y += rows*(swatch+gap) + 16;
 
-  // Thickness
   const stepH = 40;
   const halfW = Math.floor((x2-x1-10)/2);
   list.push({label:'THINNER', kind:'thickness', value:-1, box:[x1,y,x1+halfW,y+stepH]});
   list.push({label:'THICKER', kind:'thickness', value:1, box:[x1+halfW+10,y,x2,y+stepH]});
   y += stepH + 30;
 
-  // Tools
   const toolH = 42;
   const tHalf = Math.floor((x2-x1-10)/2);
   const toolBoxes = [['PEN','pen'],['LINE','line'],['RECT','rect'],['CIRCLE','circle']];
@@ -584,13 +695,11 @@ function buildButtonLayout(){
   const rowsT = Math.ceil(toolBoxes.length/2);
   y += rowsT*(toolH+10) + 14;
 
-  // Undo / Redo
   const urH = 40;
   list.push({label:'UNDO', kind:'action', value:'undo', box:[x1,y,x1+halfW,y+urH]});
   list.push({label:'REDO', kind:'action', value:'redo', box:[x1+halfW+10,y,x2,y+urH]});
   y += urH + 16;
 
-  // Clear / Save
   const bigH = 48;
   list.push({label:'CLEAR BOARD', kind:'action', value:'clear', box:[x1,y,x2,y+bigH]});
   y += bigH+10;
@@ -641,7 +750,7 @@ function doRedo(){
 }
 
 // ==========================================================================
-// DRAWING PRIMITIVES (EXACT PROVEN ENGINE)
+// DRAWING PRIMITIVES
 // ==========================================================================
 function boardLine(x1,y1,x2,y2,color,thickness,erase=false){
   boardCtx.save();
@@ -695,7 +804,7 @@ function saveImage(){
 
 function triggerButtonAction(btn, now){
   const {label, kind, value} = btn;
-  if(kind==='color'){ activeColorName=label; activeColor=value; }
+  if(kind==='color'){ activeColorName=label; activeColor=value; if(activeTool==='eraser') activeTool='pen'; }
   else if(kind==='tool'){ activeTool=value; }
   else if(kind==='thickness'){ brushThickness = Math.min(40, Math.max(2, brushThickness+value*2)); }
   else if(kind==='action' && value==='undo'){ if(doUndo()){ lastToast='Undo'; lastToastTime=now; } }
@@ -728,13 +837,8 @@ function drawSidebar(hoverProgress, confirmedGesture, handPresent, fps, now){
   ctx.fillStyle = PANEL_BG;
   ctx.fillRect(0, 0, SIDEBAR_WIDTH, H);
 
-  if (sidebarHeaderGrad){
-    ctx.fillStyle = sidebarHeaderGrad;
-    ctx.fillRect(0,0,SIDEBAR_WIDTH, headerH);
-  } else {
-    ctx.fillStyle = PANEL_BG_2;
-    ctx.fillRect(0,0,SIDEBAR_WIDTH, headerH);
-  }
+  ctx.fillStyle = sidebarHeaderGrad || PANEL_BG_2;
+  ctx.fillRect(0,0,SIDEBAR_WIDTH, headerH);
 
   ctx.strokeStyle = ACCENT_CYAN; ctx.lineWidth=2;
   ctx.beginPath(); ctx.arc(28,30,9,0,Math.PI*2); ctx.stroke();
@@ -825,7 +929,6 @@ function drawSidebar(hoverProgress, confirmedGesture, handPresent, fps, now){
 
   ctx.restore();
 
-  // Scrollbar indicator
   const maxScroll = Math.max(0, sidebarContentHeight - vp.height);
   if (maxScroll > 0){
     const trackX = SIDEBAR_WIDTH - 5;
@@ -839,14 +942,13 @@ function drawSidebar(hoverProgress, confirmedGesture, handPresent, fps, now){
     ctx.fillRect(trackX, thumbY, 3, thumbH);
   }
 
-  // Footer
   const gy = H-66;
   ctx.strokeStyle = PANEL_LINE; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(18,gy-14); ctx.lineTo(SIDEBAR_WIDTH-18, gy-14); ctx.stroke();
   ctx.fillStyle = PANEL_TEXT; ctx.font="11px 'Segoe UI', sans-serif"; ctx.textAlign='left';
   ctx.fillText(handPresent ? 'hand tracked' : 'hand not found', 20, gy+8);
   ctx.fillStyle = PANEL_SUBTEXT; ctx.font="10px 'Segoe UI', sans-serif"; ctx.textAlign='right';
-  ctx.fillText(`${fps.toFixed(1)} FPS`, SIDEBAR_WIDTH-18, gy+8);
+  ctx.fillText(`${fps.toFixed(0)} FPS · ${engine ? engine.delegate : ''}`, SIDEBAR_WIDTH-18, gy+8);
   ctx.textAlign='left';
   ctx.font="9.5px 'Segoe UI', sans-serif";
   ctx.fillText('index = draw   index+middle = select', 20, gy+30);
@@ -887,38 +989,36 @@ function drawHelpOverlay(){
 }
 
 function overlayCameraPip(handPresent, now, handLandmarks){
+  const vw = video.videoWidth || 4, vh = video.videoHeight || 3;
   const pw = Math.round(Math.min(220, Math.max(120, W*0.22)));
-  const ph = Math.round(pw*(170/230));
+  const ph = Math.round(pw * (vh/vw));
   const x1 = W-PIP_MARGIN-pw, y1 = PIP_MARGIN+10;
   const x2 = x1+pw, y2 = y1+ph;
 
   roundRect(ctx, x1-2, y1-2, x2+2, y2+2, 10, 'rgb(18,18,18)', null);
 
   ctx.save();
-  if (!IS_MOBILE){
-    ctx.beginPath();
-    const r=8;
-    ctx.moveTo(x1+r,y1); ctx.arcTo(x2,y1,x2,y2,r); ctx.arcTo(x2,y2,x1,y2,r); ctx.arcTo(x1,y2,x1,y1,r); ctx.arcTo(x1,y1,x2,y1,r);
-    ctx.closePath();
-    ctx.clip();
-  }
-
+  ctx.beginPath();
+  const r=8;
+  ctx.moveTo(x1+r,y1); ctx.arcTo(x2,y1,x2,y2,r); ctx.arcTo(x2,y2,x1,y2,r); ctx.arcTo(x1,y2,x1,y1,r); ctx.arcTo(x1,y1,x2,y1,r);
+  ctx.closePath();
+  ctx.clip();
   ctx.translate(x2,0); ctx.scale(-1,1);
   ctx.drawImage(video, W-x2, y1, pw, ph);
   ctx.restore();
 
   if(handPresent && handLandmarks){
     ctx.strokeStyle='rgb(90,220,130)'; ctx.lineWidth=1.5;
+    ctx.beginPath();
     for(const [a,b] of HAND_CONNECTIONS){
       const pa=handLandmarks[a], pb=handLandmarks[b];
-      const ax = x1 + (1-pa.x)*pw, ay = y1 + pa.y*ph;
-      const bx = x1 + (1-pb.x)*pw, by = y1 + pb.y*ph;
-      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+      ctx.moveTo(x1 + (1-pa.x)*pw, y1 + pa.y*ph);
+      ctx.lineTo(x1 + (1-pb.x)*pw, y1 + pb.y*ph);
     }
+    ctx.stroke();
     ctx.fillStyle='rgb(60,170,255)';
     for(const lm of handLandmarks){
-      const px = x1+(1-lm.x)*pw, py = y1+lm.y*ph;
-      ctx.fillRect(px-1.5, py-1.5, 3, 3);
+      ctx.fillRect(x1+(1-lm.x)*pw-1.5, y1+lm.y*ph-1.5, 3, 3);
     }
   }
 
@@ -978,7 +1078,58 @@ function drawToast(text, elapsed, duration=2.0){
 }
 
 // ==========================================================================
-// MAIN PROCESSING LOOP
+// DETECTION (runs once per NEW camera frame — no artificial throttle)
+// ==========================================================================
+async function fallbackToCPU(){
+  if(cpuFallbackBusy || !engine || engine.delegate==='CPU') return;
+  cpuFallbackBusy = true;
+  try{
+    console.warn('GPU detection failing — switching to CPU');
+    const lm = await createLandmarker(engine.vision, engine.bytes, 'CPU');
+    warmUp(lm);
+    handLandmarker = lm;
+    engine.lm = lm; engine.delegate = 'CPU';
+    detectErrCount = 0;
+    lastDetectMs = Math.max(lastDetectMs, 3);
+  }catch(e){ console.error('CPU fallback failed', e); }
+  cpuFallbackBusy = false;
+}
+
+function detectIfNewFrame(now){
+  if(!handLandmarker || cpuFallbackBusy || video.readyState < 2 || !video.videoWidth) return null;
+
+  let isNew;
+  if(rvfcArmed){ isNew = newVideoFrame; newVideoFrame = false; }
+  else { isNew = video.currentTime !== lastVideoTime; lastVideoTime = video.currentTime; }
+  if(!isNew) return null;
+
+  ensureInferenceSize();
+  inferenceCtx.drawImage(video, 0, 0, inferenceCanvas.width, inferenceCanvas.height);
+
+  const ts = Math.max(now, lastDetectMs + 1);
+  lastDetectMs = ts;
+  try{
+    const res = handLandmarker.detectForVideo(inferenceCanvas, ts);
+    detectErrCount = 0;
+    return res || { landmarks: [] };
+  }catch(err){
+    detectErrCount++;
+    if(detectErrCount >= 8) fallbackToCPU();
+    return null;
+  }
+}
+
+function resetHandState(){
+  handTracked = false; lostFrames = 0;
+  lastHandLandmarks = null;
+  targetX = targetY = null;
+  currentSmoothedX = currentSmoothedY = null;
+  filterX.reset(); filterY.reset();
+  smoother.reset(); confirmedGesture = 'IDLE';
+}
+
+// ==========================================================================
+// MAIN LOOP
 // ==========================================================================
 function handleMenuGesture(ix,iy,now){
   shapeAnchor = null; xp=0; yp=0; strokePendingPos=null;
@@ -998,71 +1149,69 @@ function handleMenuGesture(ix,iy,now){
   }
 }
 
-function processFrame(now){
-  ctx.drawImage(gridCanvas, 0, 0);
-  ctx.drawImage(boardCanvas, 0, 0);
-
-  let handPresent=false, ix=null, iy=null, rawGesture='IDLE';
-
-  if(handLandmarker && video.readyState>=2 && video.videoWidth > 0 && video.videoHeight > 0){
-    let newFrameDetected = false;
-    if (now - lastDetectMs >= DETECT_INTERVAL_MS){
-      try {
-        const safeNow = Math.max(now, (lastDetectMs || 0) + 1);
-        lastDetectMs = safeNow;
-        // Hardware 2D scaling downsamples in 0.2ms, reducing neural network compute by 80%!
-        if (IS_MOBILE){
-          inferenceCtx.drawImage(video, 0, 0, INFERENCE_W, INFERENCE_H);
-          cachedResult = handLandmarker.detectForVideo(inferenceCanvas, safeNow);
-        } else {
-          cachedResult = handLandmarker.detectForVideo(video, safeNow);
-        }
-        newFrameDetected = true;
-      } catch(err) {
-        console.warn('Frame detection skipped:', err);
-      }
+function freehandStep(ix,iy,color,thick,erase){
+  if(xp===0 && yp===0){
+    if(strokePendingPos===null){
+      strokePendingPos = [ix,iy];
+    } else if(Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]) >= MIN_MOVE_DIST){
+      pushHistory();
+      [xp,yp] = strokePendingPos;
+      boardLine(xp,yp,ix,iy,color,thick,erase);
+      xp=ix; yp=iy;
+      strokePendingPos = null;
     }
+  } else if(Math.hypot(ix-xp, iy-yp) >= MIN_MOVE_DIST){
+    boardLine(xp,yp,ix,iy,color,thick,erase);
+    xp=ix; yp=iy;
+  }
+}
 
-    if (cachedResult && cachedResult.landmarks && cachedResult.landmarks.length > 0){
-      handPresent = true;
-      const landmarks = cachedResult.landmarks[0];
-      lastHandLandmarks = landmarks;
-      const up = fingersUp(landmarks);
-      rawGesture = classifyRawGesture(up);
+let prevRender = performance.now();
 
-      if (newFrameDetected || targetX === null){
-        const indexTip = landmarks[TIPS.index];
-        const mirroredX = 1 - indexTip.x;
-        const rawX = Math.min(Math.max(mirroredX*W, 0), W-1);
-        const rawY = Math.min(Math.max(indexTip.y*H, 0), H-1);
-        targetX = filterX.filter(rawX, now/1000);
-        targetY = filterY.filter(rawY, now/1000);
-      }
+function processFrame(now){
+  // ---- 1) Detection (only when the camera delivered a new frame) ----
+  const res = detectIfNewFrame(now);
+  if(res){
+    if(res.landmarks && res.landmarks.length > 0){
+      lostFrames = 0;
+      handTracked = true;
+      const lms = res.landmarks[0];
+      lastHandLandmarks = lms;
 
-      // Smooth 60 FPS LERP: glides continuously between detection frames without jerkiness!
-      if (targetX !== null){
-        if (currentSmoothedX === null){
-          currentSmoothedX = targetX;
-          currentSmoothedY = targetY;
-        } else {
-          const lerpSpeed = IS_MOBILE ? 0.65 : 0.85;
-          currentSmoothedX += (targetX - currentSmoothedX) * lerpSpeed;
-          currentSmoothedY += (targetY - currentSmoothedY) * lerpSpeed;
-        }
-        ix = Math.round(currentSmoothedX);
-        iy = Math.round(currentSmoothedY);
-      }
-    } else {
-      lastHandLandmarks = null;
-      targetX = null;
-      targetY = null;
-      currentSmoothedX = null;
-      currentSmoothedY = null;
-      filterX.reset(); filterY.reset();
+      confirmedGesture = smoother.update(classifyRawGesture(fingersUp(lms)));
+
+      const tip = lms[TIPS.index];
+      const span = 1 - 2*MAP_MARGIN;
+      const nx = clamp(((1 - tip.x) - MAP_MARGIN)/span, 0, 1);
+      const ny = clamp((tip.y - MAP_MARGIN)/span, 0, 1);
+      const t = now/1000;
+      targetX = filterX.filter(nx*(W-1), t);
+      targetY = filterY.filter(ny*(H-1), t);
+    } else if(handTracked){
+      lostFrames++;
+      if(lostFrames > HAND_LOST_GRACE) resetHandState();
     }
   }
 
-  const gesture = smoother.update(rawGesture);
+  // ---- 2) Frame-rate independent glide between detections ----
+  const dtR = Math.min(Math.max((now - prevRender)/1000, 0.001), 0.1);
+  prevRender = now;
+  let ix=null, iy=null;
+  if(handTracked && targetX !== null){
+    if(currentSmoothedX === null || Math.hypot(targetX-currentSmoothedX, targetY-currentSmoothedY) > 160){
+      currentSmoothedX = targetX; currentSmoothedY = targetY;
+    } else {
+      const a = 1 - Math.exp(-dtR/CURSOR_LERP_TAU);
+      currentSmoothedX += (targetX - currentSmoothedX) * a;
+      currentSmoothedY += (targetY - currentSmoothedY) * a;
+    }
+    ix = Math.round(currentSmoothedX);
+    iy = Math.round(currentSmoothedY);
+  }
+  const handPresent = handTracked && ix !== null;
+
+  // ---- 3) Gesture actions ----
+  const gesture = handPresent ? confirmedGesture : 'IDLE';
   let shapePreview = null;
   const drawStartX = drawAreaStartX();
   const sidebarVisible = isSidebarVisible();
@@ -1072,41 +1221,17 @@ function processFrame(now){
   } else if(gesture==='DRAW' && ix!==null && ix>drawStartX && !touchDrawingActive){
     hoverLabel = null;
     if(activeTool==='pen'){
-      if(xp===0 && yp===0){
-        // Waiting for deliberate movement to start a stroke
-        if(strokePendingPos===null){
-          strokePendingPos = [ix,iy];
-        } else {
-          const d = Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]);
-          if(d >= MIN_MOVE_DIST){
-            pushHistory();
-            [xp,yp] = strokePendingPos;
-            boardLine(xp,yp,ix,iy,activeColor,brushThickness,false);
-            xp=ix; yp=iy;
-            strokePendingPos = null;
-          }
-        }
-      } else {
-        // Continuous drawing: ONLY draw if moved beyond tremor threshold
-        const d = Math.hypot(ix - xp, iy - yp);
-        if(d >= MIN_MOVE_DIST){
-          boardLine(xp,yp,ix,iy,activeColor,brushThickness,false);
-          xp=ix; yp=iy;
-        }
-        // If d < MIN_MOVE_DIST, holding finger still => NO line drawn!
-      }
+      freehandStep(ix,iy,activeColor,brushThickness,false);
+    } else if(activeTool==='eraser'){
+      freehandStep(ix,iy,'#000',ERASER_THICKNESS_MANUAL,true);
     } else {
-      // Shape tools
       if(shapeAnchor===null){
         if(strokePendingPos===null){
           strokePendingPos = [ix,iy];
-        } else {
-          const d = Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]);
-          if(d >= MIN_MOVE_DIST){
-            shapeAnchor = strokePendingPos;
-            shapePreview = [activeTool, shapeAnchor, [ix,iy]];
-            strokePendingPos = null;
-          }
+        } else if(Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]) >= MIN_MOVE_DIST){
+          shapeAnchor = strokePendingPos;
+          shapePreview = [activeTool, shapeAnchor, [ix,iy]];
+          strokePendingPos = null;
         }
       } else {
         shapePreview = [activeTool, shapeAnchor, [ix,iy]];
@@ -1114,26 +1239,7 @@ function processFrame(now){
     }
   } else if(gesture==='ERASE' && ix!==null && ix>drawStartX && !touchDrawingActive){
     hoverLabel = null; shapeAnchor = null;
-    if(xp===0 && yp===0){
-      if(strokePendingPos===null){
-        strokePendingPos = [ix,iy];
-      } else {
-        const d = Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]);
-        if(d >= MIN_MOVE_DIST){
-          pushHistory();
-          [xp,yp] = strokePendingPos;
-          boardLine(xp,yp,ix,iy,'#000',ERASER_THICKNESS_GESTURE,true);
-          xp=ix; yp=iy;
-          strokePendingPos = null;
-        }
-      }
-    } else {
-      const d = Math.hypot(ix - xp, iy - yp);
-      if(d >= MIN_MOVE_DIST){
-        boardLine(xp,yp,ix,iy,'#000',ERASER_THICKNESS_GESTURE,true);
-        xp=ix; yp=iy;
-      }
-    }
+    freehandStep(ix,iy,'#000',ERASER_THICKNESS_GESTURE,true);
   } else {
     if(shapeAnchor!==null && ix!==null){
       pushHistory();
@@ -1142,9 +1248,10 @@ function processFrame(now){
     shapeAnchor=null; xp=0; yp=0; hoverLabel=null; hoverStart=null; strokePendingPos=null;
   }
 
+  // ---- 4) Render once ----
+  ctx.drawImage(gridCanvas, 0, 0);
+  ctx.drawImage(boardCanvas, 0, 0);
   if(shapePreview){
-    ctx.drawImage(gridCanvas, 0, 0);
-    ctx.drawImage(boardCanvas, 0, 0);
     const [tool,p1,p2] = shapePreview;
     drawShapePreview(ctx, tool, p1, p2, activeColor, brushThickness);
   }
@@ -1164,7 +1271,6 @@ function processFrame(now){
   }
 
   drawToast(lastToast, (now-lastToastTime)/1000);
-
   if(showHelp) drawHelpOverlay();
 }
 
@@ -1175,7 +1281,7 @@ function loop(now){
 }
 
 // ==========================================================================
-// POINTER / TOUCH EVENTS (Instant taps, scroll, and optional touch draw)
+// POINTER / TOUCH EVENTS
 // ==========================================================================
 function pointerCanvasCoords(e){
   const rect = canvas.getBoundingClientRect();
@@ -1188,7 +1294,6 @@ canvas.addEventListener('pointerdown', (e)=>{
   if(!running) return;
   const [x,y] = pointerCanvasCoords(e);
 
-  // If tap falls inside visible sidebar
   if(isSidebarVisible() && x <= SIDEBAR_WIDTH){
     const btn = hitTestSidebar(x, y);
     if (btn){
@@ -1199,7 +1304,6 @@ canvas.addEventListener('pointerdown', (e)=>{
       e.stopPropagation();
       return;
     }
-
     const maxScroll = Math.max(0, sidebarContentHeight - sidebarViewport.height);
     if (maxScroll > 0){
       scrollDragActive = true;
@@ -1211,7 +1315,6 @@ canvas.addEventListener('pointerdown', (e)=>{
     return;
   }
 
-  // Direct drawing on the board with touch / mouse
   touchDrawingActive = true;
   touchPrevPos = [x, y];
   pushHistory();
@@ -1224,11 +1327,11 @@ canvas.addEventListener('pointermove', (e)=>{
     e.preventDefault();
     return;
   }
-
   if (touchDrawingActive && touchPrevPos){
     const [x, y] = pointerCanvasCoords(e);
     if (x > drawAreaStartX()){
-      boardLine(touchPrevPos[0], touchPrevPos[1], x, y, activeColor, brushThickness, activeTool==='eraser');
+      const er = activeTool==='eraser';
+      boardLine(touchPrevPos[0], touchPrevPos[1], x, y, activeColor, er ? ERASER_THICKNESS_MANUAL : brushThickness, er);
       touchPrevPos = [x, y];
     }
     e.preventDefault();
@@ -1272,17 +1375,26 @@ fullscreenBtn.addEventListener('click', (e)=>{
   }
 });
 
-// Flip Camera (Front / Back on Mobile)
+async function openCamera(){
+  try{
+    return await navigator.mediaDevices.getUserMedia(getCameraConstraints());
+  }catch(err){
+    if(err && (err.name==='OverconstrainedError' || err.name==='NotReadableError')){
+      return await navigator.mediaDevices.getUserMedia({ video:{ facingMode: currentFacingMode }, audio:false });
+    }
+    throw err;
+  }
+}
+
 camFlipBtn.addEventListener('click', async (e)=>{
   e.preventDefault();
   currentFacingMode = (currentFacingMode === 'user') ? 'environment' : 'user';
-  if (video.srcObject){
-    video.srcObject.getTracks().forEach(t => t.stop());
-  }
+  if (video.srcObject){ video.srcObject.getTracks().forEach(t => t.stop()); }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia(getCameraConstraints());
-    video.srcObject = stream;
+    video.srcObject = await openCamera();
     await video.play();
+    lastVW = 0; lastVH = 0; lastVideoTime = -1;
+    resetHandState();
   } catch(err){
     console.warn('Camera switch error:', err);
   }
@@ -1320,135 +1432,49 @@ window.addEventListener('keydown', (e)=>{
     default:
       if(e.key>='1' && e.key<='8'){
         const idx = parseInt(e.key,10)-1;
-        if(idx<COLOR_NAMES.length){ activeColorName=COLOR_NAMES[idx]; activeColor=COLORS[activeColorName]; }
+        if(idx<COLOR_NAMES.length){ activeColorName=COLOR_NAMES[idx]; activeColor=COLORS[activeColorName]; if(activeTool==='eraser') activeTool='pen'; }
       }
   }
 });
 
 // ==========================================================================
-// FAST PARALLEL STARTUP & BACKGROUND PRELOADING (ULTRA-FAST & LOW-RAM OPTIMIZED)
+// START (the AI engine is already loading/loaded — only the camera is left)
 // ==========================================================================
-function updateLoading(percent, text){
-  const bar = document.getElementById('loadingBarFill');
-  const txt = document.getElementById('loadingStatusText');
-  bar.style.width = `${percent}%`;
-  txt.textContent = text;
-}
-
-let aiPreloadPromise = null;
-
-async function getBestModelPath(){
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1200);
-    const resp = await fetch(LOCAL_MODEL_URL, { method: 'HEAD', signal: controller.signal });
-    clearTimeout(timeout);
-    if (resp.ok) return LOCAL_MODEL_URL;
-  } catch(e){}
-  return CDN_MODEL_URL;
-}
-
-function preloadAIAssets(){
-  if (aiPreloadPromise) return aiPreloadPromise;
-  aiPreloadPromise = (async ()=>{
-    try {
-      const visionPromise = FilesetResolver.forVisionTasks(WASM_URL);
-      const modelPathPromise = getBestModelPath();
-      const [vision, modelPath] = await Promise.all([visionPromise, modelPathPromise]);
-      return { vision, modelPath };
-    } catch(e){
-      console.warn('Preload in background note:', e);
-      return null;
-    }
-  })();
-  return aiPreloadPromise;
-}
-
-// Start background download immediately when the page loads!
-preloadAIAssets();
-
-async function loadLandmarkerWithFallback(vision, modelAssetPath){
-  const createWithDelegate = (delegate) => HandLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath, delegate },
-    runningMode: 'VIDEO',
-    numHands: 1,
-    minHandDetectionConfidence: 0.6,
-    minHandPresenceConfidence: 0.45,
-    minTrackingConfidence: 0.45,
-  });
-
-  if (IS_MOBILE){
-    try {
-      // 1.5s GPU compilation race: on budget GPUs, immediately fall back to SIMD CPU without hanging!
-      const gpuTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('GPU timeout')), 1500));
-      return await Promise.race([createWithDelegate('GPU'), gpuTimeout]);
-    } catch(err){
-      console.log('Mobile device: using ultra-fast WASM SIMD (CPU) engine for low RAM:', err);
-      return await createWithDelegate('CPU');
-    }
-  } else {
-    try {
-      return await createWithDelegate('GPU');
-    } catch(e){
-      return await createWithDelegate('CPU');
-    }
-  }
-}
-
 async function startApp(){
   const startBtn = document.getElementById('startBtn');
-  const loadingContainer = document.getElementById('loadingContainer');
   const errBox = document.getElementById('errBox');
   const startScreen = document.getElementById('startScreen');
 
-  startBtn.style.display = 'none';
-  loadingContainer.style.display = 'flex';
+  userStarted = true;
+  startBtn.disabled = true;
+  startBtn.textContent = engine ? 'Starting...' : 'Loading AI...';
   errBox.style.display = 'none';
-
-  updateLoading(20, 'Connecting Camera...');
 
   try{
     const cameraPromise = (async ()=>{
-      const stream = await navigator.mediaDevices.getUserMedia(getCameraConstraints());
+      const stream = await openCamera();
       video.srcObject = stream;
       await video.play();
+      armFrameCallback();
     })();
 
-    const aiPromise = (async ()=>{
-      updateLoading(45, 'Loading AI Engine...');
-      let pre = await preloadAIAssets();
-      let vision = pre ? pre.vision : null;
-      let modelPath = pre ? pre.modelPath : null;
-
-      if (!vision){
-        vision = await FilesetResolver.forVisionTasks(WASM_URL);
-      }
-      if (!modelPath){
-        modelPath = await getBestModelPath();
-      }
-
-      updateLoading(75, 'Configuring Neural Pipeline...');
-      return await loadLandmarkerWithFallback(vision, modelPath);
-    })();
-
-    const [, landmarker] = await Promise.all([cameraPromise, aiPromise]);
-    handLandmarker = landmarker;
+    const [, eng] = await Promise.all([cameraPromise, enginePromise]);
+    handLandmarker = eng.lm;
 
     updateLoading(100, 'Ready!');
-
-    loadingContainer.style.display = 'none';
     startScreen.style.display = 'none';
 
     sidebarOpen = !isSmallScreen();
     resizeAll();
     updateMenuBtnState();
 
+    prevRender = performance.now();
     running = true;
-    startTime = performance.now();
     requestAnimationFrame(loop);
   } catch(err){
-    loadingContainer.style.display = 'none';
-    startBtn.style.display = 'inline-block';
+    userStarted = false;
+    startBtn.disabled = false;
+    startBtn.textContent = 'Enable Camera & Start';
     errBox.style.display = 'block';
     errBox.innerHTML = `<strong>Error Starting:</strong> ${err && err.message ? err.message : err}<br><br>` +
       `Make sure you allowed camera permission and are using <code>HTTPS</code> or <code>localhost</code>.`;
@@ -1458,7 +1484,6 @@ async function startApp(){
 
 document.getElementById('startBtn').addEventListener('click', startApp);
 
-// Initialize initial layout
 resizeAll();
 updateMenuBtnState();
 </script>
