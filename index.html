@@ -168,18 +168,20 @@ function isSmallScreen(){
 // ==========================================================================
 // CONFIG (Original proven high-precision tuning)
 // ==========================================================================
-const GESTURE_SMOOTHING = IS_MOBILE ? 9 : 12;
-const EURO_MIN_CUTOFF = IS_MOBILE ? 2.6 : 2.4;
-const EURO_BETA = IS_MOBILE ? 0.30 : 0.35;
+const GESTURE_SMOOTHING = IS_MOBILE ? 8 : 10;
+// Lower minCutoff (1.0 Hz) locks stationary position and wipes out hand tremor
+// Higher beta (0.50) provides instant lag-free tracking when moving
+const EURO_MIN_CUTOFF = 1.0;
+const EURO_BETA = 0.50;
 const EURO_D_CUTOFF = 1.0;
-const EURO_MAX_DT = IS_MOBILE ? 0.08 : 0.05;
+const EURO_MAX_DT = 0.05;
 
 const HOVER_SELECT_SECONDS = 0.6;
 const FINGER_EXTEND_RATIO = 1.20;
 const MAX_UNDO = 25;
 const ERASER_THICKNESS_GESTURE = 70;
 const ERASER_THICKNESS_MANUAL = 44;
-const STROKE_START_DIST = 3;
+const MIN_MOVE_DIST = 4.5; // Tremor deadband: prevents jitter lines when holding finger still
 const PIP_MARGIN = IS_MOBILE ? 12 : 22;
 
 // Detection throttle: 30 FPS inference on mobile prevents thermal throttling & battery drain
@@ -400,6 +402,7 @@ let startTime = performance.now();
 let lastHandLandmarks = null;
 let lastDetectMs = 0;
 let cachedResult = null;
+let lastFilteredPos = null;
 
 // Pointer / scroll drag
 let scrollDragActive = false;
@@ -985,34 +988,42 @@ function processFrame(now){
   let handPresent=false, ix=null, iy=null, rawGesture='IDLE';
 
   if(handLandmarker && video.readyState>=2 && video.videoWidth > 0 && video.videoHeight > 0){
+    let newFrameDetected = false;
     if (now - lastDetectMs >= DETECT_INTERVAL_MS){
       try {
         const safeNow = Math.max(now, (lastDetectMs || 0) + 1);
         lastDetectMs = safeNow;
         cachedResult = handLandmarker.detectForVideo(video, safeNow);
+        newFrameDetected = true;
       } catch(err) {
         console.warn('Frame detection skipped:', err);
       }
     }
-    const result = cachedResult;
-    if (result){
-      handPresent = !!(result.landmarks && result.landmarks.length>0);
-      if(handPresent){
-        const landmarks = result.landmarks[0];
-        lastHandLandmarks = landmarks;
-        const up = fingersUp(landmarks);
-        rawGesture = classifyRawGesture(up);
 
+    if (cachedResult && cachedResult.landmarks && cachedResult.landmarks.length > 0){
+      handPresent = true;
+      const landmarks = cachedResult.landmarks[0];
+      lastHandLandmarks = landmarks;
+      const up = fingersUp(landmarks);
+      rawGesture = classifyRawGesture(up);
+
+      if (newFrameDetected || !lastFilteredPos){
         const indexTip = landmarks[TIPS.index];
         const mirroredX = 1 - indexTip.x;
         const rawX = Math.min(Math.max(mirroredX*W, 0), W-1);
         const rawY = Math.min(Math.max(indexTip.y*H, 0), H-1);
-        ix = Math.round(filterX.filter(rawX, now/1000));
-        iy = Math.round(filterY.filter(rawY, now/1000));
-      } else {
-        lastHandLandmarks = null;
-        filterX.reset(); filterY.reset();
+        lastFilteredPos = [
+          Math.round(filterX.filter(rawX, now/1000)),
+          Math.round(filterY.filter(rawY, now/1000))
+        ];
       }
+      if (lastFilteredPos){
+        [ix, iy] = lastFilteredPos;
+      }
+    } else {
+      lastHandLandmarks = null;
+      lastFilteredPos = null;
+      filterX.reset(); filterY.reset();
     }
   }
 
@@ -1026,37 +1037,66 @@ function processFrame(now){
   } else if(gesture==='DRAW' && ix!==null && ix>drawStartX && !touchDrawingActive){
     hoverLabel = null;
     if(activeTool==='pen'){
-      if(strokePendingPos===null){ strokePendingPos=[ix,iy]; }
-      else{
-        const dx=ix-strokePendingPos[0], dy=iy-strokePendingPos[1];
-        if(Math.hypot(dx,dy) >= STROKE_START_DIST){
-          if(xp===0 && yp===0){ pushHistory(); [xp,yp]=strokePendingPos; }
+      if(xp===0 && yp===0){
+        // Waiting for deliberate movement to start a stroke
+        if(strokePendingPos===null){
+          strokePendingPos = [ix,iy];
+        } else {
+          const d = Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]);
+          if(d >= MIN_MOVE_DIST){
+            pushHistory();
+            [xp,yp] = strokePendingPos;
+            boardLine(xp,yp,ix,iy,activeColor,brushThickness,false);
+            xp=ix; yp=iy;
+            strokePendingPos = null;
+          }
+        }
+      } else {
+        // Continuous drawing: ONLY draw if moved beyond tremor threshold
+        const d = Math.hypot(ix - xp, iy - yp);
+        if(d >= MIN_MOVE_DIST){
           boardLine(xp,yp,ix,iy,activeColor,brushThickness,false);
           xp=ix; yp=iy;
-          strokePendingPos=null;
         }
+        // If d < MIN_MOVE_DIST, holding finger still => NO line drawn!
       }
     } else {
-      if(strokePendingPos===null){ strokePendingPos=[ix,iy]; }
-      else{
-        const dx=ix-strokePendingPos[0], dy=iy-strokePendingPos[1];
-        if(Math.hypot(dx,dy) >= STROKE_START_DIST){
-          shapeAnchor = strokePendingPos;
-          shapePreview = [activeTool, shapeAnchor, [ix,iy]];
-          strokePendingPos = null;
+      // Shape tools
+      if(shapeAnchor===null){
+        if(strokePendingPos===null){
+          strokePendingPos = [ix,iy];
+        } else {
+          const d = Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]);
+          if(d >= MIN_MOVE_DIST){
+            shapeAnchor = strokePendingPos;
+            shapePreview = [activeTool, shapeAnchor, [ix,iy]];
+            strokePendingPos = null;
+          }
         }
+      } else {
+        shapePreview = [activeTool, shapeAnchor, [ix,iy]];
       }
     }
   } else if(gesture==='ERASE' && ix!==null && ix>drawStartX && !touchDrawingActive){
     hoverLabel = null; shapeAnchor = null;
-    if(strokePendingPos===null){ strokePendingPos=[ix,iy]; }
-    else{
-      const dx=ix-strokePendingPos[0], dy=iy-strokePendingPos[1];
-      if(Math.hypot(dx,dy) >= STROKE_START_DIST){
-        if(xp===0 && yp===0){ pushHistory(); [xp,yp]=strokePendingPos; }
+    if(xp===0 && yp===0){
+      if(strokePendingPos===null){
+        strokePendingPos = [ix,iy];
+      } else {
+        const d = Math.hypot(ix-strokePendingPos[0], iy-strokePendingPos[1]);
+        if(d >= MIN_MOVE_DIST){
+          pushHistory();
+          [xp,yp] = strokePendingPos;
+          boardLine(xp,yp,ix,iy,'#000',ERASER_THICKNESS_GESTURE,true);
+          xp=ix; yp=iy;
+          strokePendingPos = null;
+        }
+      }
+    } else {
+      const d = Math.hypot(ix - xp, iy - yp);
+      if(d >= MIN_MOVE_DIST){
         boardLine(xp,yp,ix,iy,'#000',ERASER_THICKNESS_GESTURE,true);
         xp=ix; yp=iy;
-        strokePendingPos=null;
       }
     }
   } else {
