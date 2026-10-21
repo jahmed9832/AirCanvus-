@@ -51,60 +51,71 @@
   #menuBtn{ display:none; }
   #menuBtn.show{ display:flex; }
 
-  /* Start Screen */
-  #startScreen{
-    position:fixed; inset:0; z-index:50;
-    display:flex; align-items:center; justify-content:center; flex-direction:column;
-    background:radial-gradient(circle at 30% 20%, #201f1d 0%, #121110 65%, #0a0a09 100%);
-    color:var(--panel-text); text-align:center; padding:24px; box-sizing:border-box;
-    overflow-y:auto;
+  /* Floating AI Status Pill */
+  .ai-status-pill{
+    position:fixed; top:calc(14px + env(safe-area-inset-top, 0px)); left:50%;
+    transform:translateX(-50%); z-index:30;
+    display:flex; align-items:center; gap:8px;
+    padding:8px 16px; border-radius:999px;
+    background:rgba(22,24,26,0.92); border:1px solid rgb(51,55,58);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    color:rgb(240,240,240); font-size:12.5px; font-weight:500;
+    box-shadow:0 4px 20px rgba(0,0,0,0.4);
+    transition:opacity 0.3s ease, transform 0.3s ease;
+    pointer-events:none;
   }
-  #startScreen h1{
-    font-size:clamp(28px,5vw,46px); margin:0 0 6px 0; font-weight:700; letter-spacing:0.5px;
-  }
-  #startScreen .sub{ color:var(--panel-subtext); font-size:13px; letter-spacing:2px; margin-bottom:24px; text-transform:uppercase; }
-  #startScreen .badge{
-    display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:999px;
-    border:1px solid var(--panel-line); color:var(--panel-subtext); font-size:12px; margin-bottom:20px;
-  }
-  #startScreen .badge .dot{ width:8px; height:8px; border-radius:50%; background:var(--accent-cyan); }
-  #startBtn{
-    background:var(--accent-cyan); color:#141312; border:none; padding:15px 44px; font-size:16px;
-    font-weight:700; border-radius:12px; cursor:pointer; letter-spacing:0.3px;
-    box-shadow:0 8px 24px rgba(60,191,232,0.3); transition:transform .15s ease, box-shadow .15s ease;
-    margin-top:10px;
-  }
-  #startBtn:hover{ transform:translateY(-1px); box-shadow:0 10px 28px rgba(60,191,232,0.45); }
-  #startBtn:active{ transform:translateY(0px) scale(0.98); }
+  .ai-status-pill.hidden{ opacity:0; transform:translateX(-50%) translateY(-12px); pointer-events:none; }
+  .pill-dot{ width:8px; height:8px; border-radius:50%; }
+  .pill-dot.warning{ background:var(--accent-amber); box-shadow:0 0 8px var(--accent-amber); animation:pillPulse 1.2s infinite; }
+  .pill-dot.success{ background:var(--accent-green); box-shadow:0 0 8px var(--accent-green); }
+  @keyframes pillPulse{ 0%,100%{opacity:1; transform:scale(1);} 50%{opacity:0.4; transform:scale(0.85);} }
 
-  #startScreen .gesture-row{ display:flex; gap:14px; margin:20px 0 10px 0; flex-wrap:wrap; justify-content:center; }
-  #startScreen .gesture{ width:110px; }
-  #startScreen .gesture .g-icon{
-    width:52px; height:52px; border-radius:14px; background:var(--panel-bg-3); border:1px solid var(--panel-line);
-    display:flex; align-items:center; justify-content:center; margin:0 auto 8px auto; font-size:24px;
+  /* Fast 1-Click Camera Permission Modal (instant 1-second load) */
+  .cam-prompt-modal{
+    position:fixed; inset:0; z-index:45;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(10,10,10,0.72); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    padding:20px; box-sizing:border-box;
+    transition:opacity 0.22s ease, visibility 0.22s ease;
   }
-  #startScreen .gesture .g-label{ font-size:11.5px; color:var(--panel-subtext); line-height:1.4; }
-
-  /* Loading progress bar on start screen */
-  #loadingContainer{
-    display:none; width:280px; margin-top:20px; flex-direction:column; align-items:center; gap:8px;
+  .cam-prompt-modal.dismissed{ opacity:0; visibility:hidden; pointer-events:none; }
+  .cam-prompt-card{
+    background:rgb(22,24,26); border:1px solid rgb(51,55,58);
+    border-radius:18px; padding:28px 24px; max-width:390px; width:100%;
+    text-align:center; box-shadow:0 12px 40px rgba(0,0,0,0.6);
+    color:rgb(240,240,240);
   }
-  .progress-bar-bg{
-    width:100%; height:6px; background:rgba(255,255,255,0.12); border-radius:6px; overflow:hidden;
+  .cam-prompt-card h2{ margin:0 0 8px 0; font-size:24px; font-weight:700; letter-spacing:0.3px; }
+  .cam-prompt-card p{ margin:0 0 16px 0; font-size:13px; color:rgb(140,143,145); line-height:1.45; }
+  .cam-badge{
+    display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:999px;
+    border:1px solid rgb(51,55,58); font-size:11px; color:rgb(140,143,145); margin-bottom:14px;
+    letter-spacing:1px; text-transform:uppercase;
   }
-  .progress-bar-fill{
-    height:100%; width:0%; background:var(--accent-cyan); border-radius:6px; transition:width 0.25s ease;
+  .cam-dot{ width:7px; height:7px; border-radius:50%; background:var(--accent-cyan); }
+  .quick-gestures{
+    display:flex; justify-content:center; gap:8px; margin-bottom:20px; flex-wrap:wrap;
   }
-  #loadingStatusText{
-    font-size:12px; color:var(--panel-subtext); font-family:monospace;
+  .quick-gestures span{
+    background:rgb(31,34,37); border:1px solid rgb(51,55,58); padding:6px 11px;
+    border-radius:8px; font-size:12px; color:rgb(240,240,240);
   }
-
-  #errBox{
-    display:none; color:var(--accent-red); font-size:13px; margin-top:16px; max-width:440px; line-height:1.5;
-    background:rgba(220,70,70,0.12); padding:10px 14px; border-radius:8px; border:1px solid rgba(220,70,70,0.3);
+  .cam-action-btn{
+    width:100%; background:var(--accent-cyan); color:#101112; border:none;
+    padding:13px 20px; font-size:15px; font-weight:700; border-radius:12px;
+    cursor:pointer; box-shadow:0 6px 20px rgba(60,191,232,0.3);
+    transition:transform .12s ease, box-shadow .12s ease;
   }
-
-  .hint{ margin-top:18px; font-size:12px; color:var(--panel-subtext); max-width:440px; line-height:1.5; }
+  .cam-action-btn:active{ transform:scale(0.98); }
+  .cam-skip-btn{
+    background:none; border:none; color:rgb(140,143,145); font-size:12.5px;
+    padding:10px; margin-top:8px; cursor:pointer; text-decoration:underline;
+  }
+  .cam-err-box{
+    margin-top:12px; font-size:12px; color:var(--accent-red);
+    background:rgba(220,70,70,0.12); padding:8px 12px; border-radius:8px; border:1px solid rgba(220,70,70,0.3);
+    line-height:1.4;
+  }
   a#dlLink{ display:none; }
 </style>
 </head>
@@ -116,36 +127,32 @@
 
 <div id="topControls">
   <button id="menuBtn" class="floating-btn" aria-label="Toggle menu" title="Toggle Sidebar">☰</button>
+  <button id="camToggleBtn" class="floating-btn" aria-label="Camera" title="Start / Camera Info">📷</button>
   <button id="camFlipBtn" class="floating-btn" aria-label="Flip Camera" title="Switch Front/Back Camera" style="display:none;">🔄</button>
   <button id="fullscreenBtn" class="floating-btn" aria-label="Fullscreen" title="Toggle Fullscreen">⛶</button>
 </div>
 
-<div id="startScreen">
-  <div class="badge"><span class="dot"></span>TOUCHLESS WHITEBOARD</div>
-  <h1>AirDraw Pro</h1>
-  <div class="sub">Next-Gen Real-Time Air Canvas</div>
+<!-- Floating AI Status Pill -->
+<div id="aiStatusPill" class="ai-status-pill hidden">
+  <span class="pill-dot warning"></span>
+  <span id="aiStatusText">AI Engine Initializing...</span>
+</div>
 
-  <div class="gesture-row">
-    <div class="gesture"><div class="g-icon">☝️</div><div class="g-label">Index finger up<br>Draw</div></div>
-    <div class="gesture"><div class="g-icon">✌️</div><div class="g-label">Index + middle<br>Select (hover)</div></div>
-    <div class="gesture"><div class="g-icon">🖐️</div><div class="g-label">Open hand<br>Eraser</div></div>
-    <div class="gesture"><div class="g-icon">✊</div><div class="g-label">Fist<br>Pen up</div></div>
-  </div>
-
-  <button id="startBtn">Enable Camera &amp; Start</button>
-
-  <div id="loadingContainer">
-    <div class="progress-bar-bg">
-      <div id="loadingBarFill" class="progress-bar-fill"></div>
+<!-- Fast 1-Click Camera Activation Modal -->
+<div id="camPromptModal" class="cam-prompt-modal">
+  <div class="cam-prompt-card">
+    <div class="cam-badge"><span class="cam-dot"></span> TOUCHLESS AIR CANVAS</div>
+    <h2>AirDraw Pro</h2>
+    <p>Grant camera access to draw in the air with hand gestures in real-time!</p>
+    <div class="quick-gestures">
+      <span>☝️ Draw</span>
+      <span>✌️ Select</span>
+      <span>🖐️ Erase</span>
+      <span>✊ Pen Up</span>
     </div>
-    <div id="loadingStatusText">Initializing AI Engine...</div>
-  </div>
-
-  <div id="errBox"></div>
-
-  <div class="hint">
-    Your camera feed stays in your browser — zero latency, 100% private.
-    Supports both Mobile &amp; Desktop in Portrait and Landscape.
+    <button id="enableCamBtn" class="cam-action-btn">⚡ Allow Camera &amp; Start Board (1s)</button>
+    <button id="tryTouchBtn" class="cam-skip-btn">Draw with Touch/Mouse First</button>
+    <div id="camErrBox" class="cam-err-box" style="display:none;"></div>
   </div>
 </div>
 
@@ -168,7 +175,7 @@ function isSmallScreen(){
 // ==========================================================================
 // CONFIG (Original proven high-precision tuning)
 // ==========================================================================
-const GESTURE_SMOOTHING = IS_MOBILE ? 8 : 10;
+const GESTURE_SMOOTHING = IS_MOBILE ? 4 : 5;
 // Lower minCutoff (1.0 Hz) locks stationary position and wipes out hand tremor
 // Higher beta (0.50) provides instant lag-free tracking when moving
 const EURO_MIN_CUTOFF = 1.0;
@@ -177,15 +184,15 @@ const EURO_D_CUTOFF = 1.0;
 const EURO_MAX_DT = 0.05;
 
 const HOVER_SELECT_SECONDS = 0.6;
-const FINGER_EXTEND_RATIO = 1.20;
+const FINGER_EXTEND_RATIO = 1.13;
 const MAX_UNDO = 25;
 const ERASER_THICKNESS_GESTURE = 70;
 const ERASER_THICKNESS_MANUAL = 44;
-const MIN_MOVE_DIST = 4.5; // Tremor deadband: prevents jitter lines when holding finger still
+const MIN_MOVE_DIST = 2.5; // Tremor deadband: prevents jitter while allowing smooth handwriting
 const PIP_MARGIN = IS_MOBILE ? 12 : 22;
 
-// Detection throttle: ~25 FPS inference on mobile prevents thermal throttling & low RAM lag
-const DETECT_INTERVAL_MS = IS_MOBILE ? 40 : 0;
+// Detection throttle: ~30 FPS inference on mobile
+const DETECT_INTERVAL_MS = IS_MOBILE ? 33 : 0;
 
 let currentFacingMode = 'user';
 
@@ -360,6 +367,7 @@ const video = document.getElementById('webcam');
 const canvas = document.getElementById('outputCanvas');
 const ctx = canvas.getContext('2d', { alpha: false });
 const menuBtn = document.getElementById('menuBtn');
+const camToggleBtn = document.getElementById('camToggleBtn');
 const camFlipBtn = document.getElementById('camFlipBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
 
@@ -409,14 +417,6 @@ let lastDetectMs = 0;
 let cachedResult = null;
 let targetX = null, targetY = null;
 let currentSmoothedX = null, currentSmoothedY = null;
-
-// Hardware 2D downsampled canvas for ultra-fast MediaPipe inference (256x192)
-const INFERENCE_W = IS_MOBILE ? 256 : 384;
-const INFERENCE_H = IS_MOBILE ? 192 : 288;
-const inferenceCanvas = document.createElement('canvas');
-inferenceCanvas.width = INFERENCE_W;
-inferenceCanvas.height = INFERENCE_H;
-const inferenceCtx = inferenceCanvas.getContext('2d', { willReadFrequently: true });
 
 // Pointer / scroll drag
 let scrollDragActive = false;
@@ -1010,13 +1010,8 @@ function processFrame(now){
       try {
         const safeNow = Math.max(now, (lastDetectMs || 0) + 1);
         lastDetectMs = safeNow;
-        // Hardware 2D scaling downsamples in 0.2ms, reducing neural network compute by 80%!
-        if (IS_MOBILE){
-          inferenceCtx.drawImage(video, 0, 0, INFERENCE_W, INFERENCE_H);
-          cachedResult = handLandmarker.detectForVideo(inferenceCanvas, safeNow);
-        } else {
-          cachedResult = handLandmarker.detectForVideo(video, safeNow);
-        }
+        // Direct video frame inference preserves native camera aspect ratio & eliminates portrait distortion
+        cachedResult = handLandmarker.detectForVideo(video, safeNow);
         newFrameDetected = true;
       } catch(err) {
         console.warn('Frame detection skipped:', err);
@@ -1033,8 +1028,11 @@ function processFrame(now){
       if (newFrameDetected || targetX === null){
         const indexTip = landmarks[TIPS.index];
         const mirroredX = 1 - indexTip.x;
-        const rawX = Math.min(Math.max(mirroredX*W, 0), W-1);
-        const rawY = Math.min(Math.max(indexTip.y*H, 0), H-1);
+        // Central 84% comfortable zone: reach all canvas edges without hand clipping at camera borders
+        const normX = Math.min(Math.max((mirroredX - 0.08) / 0.84, 0), 1);
+        const normY = Math.min(Math.max((indexTip.y - 0.08) / 0.84, 0), 1);
+        const rawX = normX * (W - 1);
+        const rawY = normY * (H - 1);
         targetX = filterX.filter(rawX, now/1000);
         targetY = filterY.filter(rawY, now/1000);
       }
@@ -1045,7 +1043,7 @@ function processFrame(now){
           currentSmoothedX = targetX;
           currentSmoothedY = targetY;
         } else {
-          const lerpSpeed = IS_MOBILE ? 0.65 : 0.85;
+          const lerpSpeed = IS_MOBILE ? 0.80 : 0.90;
           currentSmoothedX += (targetX - currentSmoothedX) * lerpSpeed;
           currentSmoothedY += (targetY - currentSmoothedY) * lerpSpeed;
         }
@@ -1326,25 +1324,54 @@ window.addEventListener('keydown', (e)=>{
 });
 
 // ==========================================================================
-// FAST PARALLEL STARTUP & BACKGROUND PRELOADING (ULTRA-FAST & LOW-RAM OPTIMIZED)
+// FAST CAMERA & BACKGROUND AI PIPELINE (INSTANT 1-SECOND BOARD LAUNCH)
 // ==========================================================================
-function updateLoading(percent, text){
-  const bar = document.getElementById('loadingBarFill');
-  const txt = document.getElementById('loadingStatusText');
-  bar.style.width = `${percent}%`;
+function showAiStatus(type, text, autoHideMs = 0){
+  const pill = document.getElementById('aiStatusPill');
+  const txt = document.getElementById('aiStatusText');
+  const dot = pill ? pill.querySelector('.pill-dot') : null;
+  if (!pill || !txt) return;
   txt.textContent = text;
+  if (dot) dot.className = 'pill-dot ' + (type === 'success' ? 'success' : 'warning');
+  pill.classList.remove('hidden');
+  if (autoHideMs > 0){
+    setTimeout(()=>{ pill.classList.add('hidden'); }, autoHideMs);
+  }
+}
+
+function hideAiStatus(){
+  const pill = document.getElementById('aiStatusPill');
+  if (pill) pill.classList.add('hidden');
 }
 
 let aiPreloadPromise = null;
 
-async function getBestModelPath(){
+async function getCachedModelPath(){
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1200);
+    const timeout = setTimeout(() => controller.abort(), 600);
     const resp = await fetch(LOCAL_MODEL_URL, { method: 'HEAD', signal: controller.signal });
     clearTimeout(timeout);
     if (resp.ok) return LOCAL_MODEL_URL;
   } catch(e){}
+
+  if ('caches' in window){
+    try {
+      const cache = await caches.open('airdraw-cache-v1');
+      const cached = await cache.match(CDN_MODEL_URL);
+      if (cached){
+        const blob = await cached.blob();
+        return URL.createObjectURL(blob);
+      }
+      // Cache in background for future visits
+      fetch(CDN_MODEL_URL).then(async (res)=>{
+        if (res.ok){
+          const c = await caches.open('airdraw-cache-v1');
+          await c.put(CDN_MODEL_URL, res);
+        }
+      }).catch(()=>{});
+    } catch(e){}
+  }
   return CDN_MODEL_URL;
 }
 
@@ -1353,7 +1380,7 @@ function preloadAIAssets(){
   aiPreloadPromise = (async ()=>{
     try {
       const visionPromise = FilesetResolver.forVisionTasks(WASM_URL);
-      const modelPathPromise = getBestModelPath();
+      const modelPathPromise = getCachedModelPath();
       const [vision, modelPath] = await Promise.all([visionPromise, modelPathPromise]);
       return { vision, modelPath };
     } catch(e){
@@ -1364,7 +1391,7 @@ function preloadAIAssets(){
   return aiPreloadPromise;
 }
 
-// Start background download immediately when the page loads!
+// Start downloading model immediately in background!
 preloadAIAssets();
 
 async function loadLandmarkerWithFallback(vision, modelAssetPath){
@@ -1372,15 +1399,14 @@ async function loadLandmarkerWithFallback(vision, modelAssetPath){
     baseOptions: { modelAssetPath, delegate },
     runningMode: 'VIDEO',
     numHands: 1,
-    minHandDetectionConfidence: 0.6,
-    minHandPresenceConfidence: 0.45,
-    minTrackingConfidence: 0.45,
+    minHandDetectionConfidence: 0.55,
+    minHandPresenceConfidence: 0.40,
+    minTrackingConfidence: 0.40,
   });
 
   if (IS_MOBILE){
     try {
-      // 1.5s GPU compilation race: on budget GPUs, immediately fall back to SIMD CPU without hanging!
-      const gpuTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('GPU timeout')), 1500));
+      const gpuTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('GPU timeout')), 1200));
       return await Promise.race([createWithDelegate('GPU'), gpuTimeout]);
     } catch(err){
       console.log('Mobile device: using ultra-fast WASM SIMD (CPU) engine for low RAM:', err);
@@ -1395,72 +1421,103 @@ async function loadLandmarkerWithFallback(vision, modelAssetPath){
   }
 }
 
-async function startApp(){
-  const startBtn = document.getElementById('startBtn');
-  const loadingContainer = document.getElementById('loadingContainer');
-  const errBox = document.getElementById('errBox');
-  const startScreen = document.getElementById('startScreen');
+let aiEngineLoading = false;
+async function initAiEngine(){
+  if (handLandmarker || aiEngineLoading) return;
+  aiEngineLoading = true;
+  showAiStatus('warning', 'Loading Air Tracker AI (Background)...');
 
-  startBtn.style.display = 'none';
-  loadingContainer.style.display = 'flex';
-  errBox.style.display = 'none';
+  try {
+    const pre = await preloadAIAssets();
+    let vision = pre ? pre.vision : null;
+    let modelPath = pre ? pre.modelPath : null;
 
-  updateLoading(20, 'Connecting Camera...');
+    if (!vision) vision = await FilesetResolver.forVisionTasks(WASM_URL);
+    if (!modelPath) modelPath = await getCachedModelPath();
 
-  try{
-    const cameraPromise = (async ()=>{
-      const stream = await navigator.mediaDevices.getUserMedia(getCameraConstraints());
-      video.srcObject = stream;
-      await video.play();
-    })();
-
-    const aiPromise = (async ()=>{
-      updateLoading(45, 'Loading AI Engine...');
-      let pre = await preloadAIAssets();
-      let vision = pre ? pre.vision : null;
-      let modelPath = pre ? pre.modelPath : null;
-
-      if (!vision){
-        vision = await FilesetResolver.forVisionTasks(WASM_URL);
-      }
-      if (!modelPath){
-        modelPath = await getBestModelPath();
-      }
-
-      updateLoading(75, 'Configuring Neural Pipeline...');
-      return await loadLandmarkerWithFallback(vision, modelPath);
-    })();
-
-    const [, landmarker] = await Promise.all([cameraPromise, aiPromise]);
-    handLandmarker = landmarker;
-
-    updateLoading(100, 'Ready!');
-
-    loadingContainer.style.display = 'none';
-    startScreen.style.display = 'none';
-
-    sidebarOpen = !isSmallScreen();
-    resizeAll();
-    updateMenuBtnState();
-
-    running = true;
-    startTime = performance.now();
-    requestAnimationFrame(loop);
+    handLandmarker = await loadLandmarkerWithFallback(vision, modelPath);
+    showAiStatus('success', '✨ Air Tracking Ready! ☝️ Draw • ✌️ Select • 🖐️ Erase', 3500);
   } catch(err){
-    loadingContainer.style.display = 'none';
-    startBtn.style.display = 'inline-block';
-    errBox.style.display = 'block';
-    errBox.innerHTML = `<strong>Error Starting:</strong> ${err && err.message ? err.message : err}<br><br>` +
-      `Make sure you allowed camera permission and are using <code>HTTPS</code> or <code>localhost</code>.`;
-    console.error(err);
+    console.warn('AI engine init error:', err);
+    showAiStatus('warning', 'Touch/Mouse drawing mode active', 3000);
+  } finally {
+    aiEngineLoading = false;
   }
 }
 
-document.getElementById('startBtn').addEventListener('click', startApp);
+let cameraActive = false;
+let cameraStarting = false;
 
-// Initialize initial layout
+async function startCamera(isAuto = false){
+  if (cameraActive || cameraStarting) return;
+  cameraStarting = true;
+  const modal = document.getElementById('camPromptModal');
+  const errBox = document.getElementById('camErrBox');
+  if (errBox) errBox.style.display = 'none';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(getCameraConstraints());
+    video.srcObject = stream;
+    await video.play();
+    cameraActive = true;
+    cameraStarting = false;
+    if (modal) modal.classList.add('dismissed');
+    if (camToggleBtn) camToggleBtn.classList.add('active');
+
+    lastToast = 'Camera active';
+    lastToastTime = performance.now();
+
+    // Trigger AI engine init non-blockingly
+    initAiEngine();
+  } catch(err){
+    cameraStarting = false;
+    console.error('Camera startup error:', err);
+    if (!isAuto && errBox){
+      errBox.style.display = 'block';
+      errBox.innerHTML = `<strong>Camera Error:</strong> ${err.message || err}<br>Please allow camera permission in browser settings.`;
+    }
+  }
+}
+
+// Camera activation button handlers
+document.getElementById('enableCamBtn').addEventListener('click', () => startCamera(false));
+document.getElementById('tryTouchBtn').addEventListener('click', () => {
+  const modal = document.getElementById('camPromptModal');
+  if (modal) modal.classList.add('dismissed');
+  initAiEngine();
+});
+
+if (camToggleBtn){
+  camToggleBtn.addEventListener('click', (e)=>{
+    e.preventDefault();
+    if (!cameraActive) {
+      startCamera(false);
+    } else {
+      lastToast = 'Camera is active';
+      lastToastTime = performance.now();
+    }
+  });
+}
+
+// Auto-detect camera permission if previously granted
+if (navigator.permissions && navigator.permissions.query){
+  navigator.permissions.query({ name: 'camera' }).then((status)=>{
+    if (status.state === 'granted'){
+      startCamera(true);
+    }
+  }).catch(()=>{});
+}
+
+// ==========================================================================
+// IMMEDIATE WHITEBOARD LAUNCH (<1s)
+// ==========================================================================
+sidebarOpen = !isSmallScreen();
 resizeAll();
 updateMenuBtnState();
+
+running = true;
+startTime = performance.now();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
